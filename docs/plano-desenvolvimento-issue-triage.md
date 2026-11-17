@@ -407,13 +407,13 @@ Ficam de fora: documentos de autenticação, infraestrutura, pipeline, ADRs, RFC
 
 ### Etapa 1 — Fundação do worker
 Requisitos: RNF14, RNF18. Depende de: primeiro pré-requisito (esqueleto commitado na `main`). Os outros dois pré-requisitos (D18 e a chave de API) só são exigidos na Etapa 13. Pré-condição: decisões D1 a D5, D16 e D17 validadas.
-- [ ] Adicionar dependências com `uv add`: `psycopg[binary,pool]`, `aio-pika`, `anthropic`, `claude-agent-sdk`; e com `uv add --dev`: `testcontainers[postgres,rabbitmq]`, `pyyaml`.
-- [ ] Completar `Settings` com as variáveis de "Contratos > Variáveis de ambiente" (`ANTHROPIC_API_KEY` como `SecretStr`; `ANALYSIS_RETRY_DELAYS_S` lido como lista de inteiros a partir de `10,30`; limites positivos) e ajustar os testes existentes.
-- [ ] Fazer `main.py` iniciar o worker com encerramento limpo em SIGTERM/SIGINT (D4); consumidor e relay entram nas Etapas 4 e 5.
-- [ ] Criar `docker-compose.dev.yml` com PostgreSQL e RabbitMQ para desenvolvimento e atualizar o `.env.example` (só nomes).
-- [ ] Criar `Dockerfile` (D17), verificando se o `claude-agent-sdk` instalado já traz o CLI do Claude Code; se não trouxer, instalar Node.js e o CLI na imagem. Registrar o resultado no README.
-- [ ] Testes: `Settings` com valores padrão e inválidos; a chave não aparece no `repr` nem em log.
-- [ ] Atualizar o README com como subir o compose de desenvolvimento e iniciar o worker.
+- [x] Adicionar dependências com `uv add`: `psycopg[binary,pool]`, `aio-pika`, `anthropic`, `claude-agent-sdk`; e com `uv add --dev`: `testcontainers[postgres,rabbitmq]`, `pyyaml`.
+- [x] Completar `Settings` com as variáveis de "Contratos > Variáveis de ambiente" (`ANTHROPIC_API_KEY` como `SecretStr`; `ANALYSIS_RETRY_DELAYS_S` lido como lista de inteiros a partir de `10,30`; limites positivos) e ajustar os testes existentes.
+- [x] Fazer `main.py` iniciar o worker com encerramento limpo em SIGTERM/SIGINT (D4); consumidor e relay entram nas Etapas 4 e 5.
+- [x] Criar `docker-compose.dev.yml` com PostgreSQL e RabbitMQ para desenvolvimento e atualizar o `.env.example` (só nomes).
+- [x] Criar `Dockerfile` (D17), verificando se o `claude-agent-sdk` instalado já traz o CLI do Claude Code; se não trouxer, instalar Node.js e o CLI na imagem. Registrar o resultado no README.
+- [x] Testes: `Settings` com valores padrão e inválidos; a chave não aparece no `repr` nem em log.
+- [x] Atualizar o README com como subir o compose de desenvolvimento e iniciar o worker.
 
 ### Etapa 2 — Schema triage, migrações e dados de teste
 Requisitos: RNF07, RNF04. Depende de: Etapa 1. Pré-condição: decisões D2 e D9 validadas.
