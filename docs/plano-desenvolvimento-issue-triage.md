@@ -47,7 +47,7 @@ As seções "Contratos", "Modelo de dados" e "Catálogo" deste plano resumem o q
 
 ## Decisões técnicas da implementação
 
-Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 validadas pelo usuário em 2026-11-17 (D1 a D12 e D16 como estão; D13, D14, D15 e D17 com as observações registradas na própria linha); D19, D20 e D21 validadas pelo usuário em 2026-11-17; D18 proposta, aguarda validação.** D1 a D5 e D7 seguem o mesmo padrão do issue-analyst-api e do issue-publisher.
+Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 validadas pelo usuário em 2026-11-17 (D1 a D12 e D16 como estão; D13, D14, D15 e D17 com as observações registradas na própria linha); D19 a D22 validadas pelo usuário em 2026-11-17; D18 proposta, aguarda validação.** D1 a D5 e D7 seguem o mesmo padrão do issue-analyst-api e do issue-publisher.
 
 | # | Ponto | Escolha proposta |
 |---|---|---|
@@ -72,6 +72,7 @@ Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 va
 | D19 | Escolhas do subagente na Etapa 4 | **Validada pelo usuário em 2026-11-17: seis aceitas como estão e uma corrigida.** 1) Reentrega de `author_edit` que já tem tentativa: `IN_PROGRESS` é retomada; `DONE` é descartada com `analysis.skipped_duplicate`. `analysis.edit_ignored` só aparece com o caso fora de `READY_TO_PUBLISH (empty_description)` ou quando o insert conflita. 2) `enrich` ou `reprocess` sem caso em `triage` → `analysis.discarded_invalid` com motivo `case_not_found`. 3) Versão da issue: vale o `issue.edited` de maior `received_at`; os enriquecimentos entram todos, em ordem de `created_at` e `id`, qualquer que seja o `trigger`. 4) `initial` sempre abre a tentativa 1, mesmo que a mensagem traga outro `attempt`. 6) Banco fora: fecha a conexão, a mensagem volta sem ack e o consumidor reconecta com espera de 1 s a 30 s, que volta a 1 s depois do próximo sucesso. 7) `Outcome` em `domain/messages.py` e `Worker` recebendo `services` para os testes. **Corrigida:** 5) descrição vazia = vazia ou só com espaços em branco de qualquer tipo (espaço, tab, quebra de linha), com `str.strip()` em Python ou `\s` em SQL, a mesma regra da entrada no issue-analyst-api; `btrim` sozinho só remove espaços. Corrigida no primeiro item da Etapa 5. Aceito também, até a Etapa 6: issue com descrição fica `IN_PROGRESS` e a mensagem volta para a fila sem pausa, porque ainda não há roteador |
 | D20 | Roteador: texto do prompt e lacunas da Etapa 6 | **Validada pelo usuário em 2026-11-17.** 1) O texto completo do roteador (prompt de sistema, mensagem do usuário, saída estruturada e nova chamada) está em "Contratos > Roteador > Texto do roteador": definições, exemplos, casos de borda e regra de desempate copiados literalmente da Spec D, mais regras redigidas na decisão; `PROMPT_VERSION = "router-v1"`. 2) `bug`, `melhoria` e `duvida`, até os especialistas existirem (Etapa 8): a tentativa fica `IN_PROGRESS` e a mensagem volta para a fila sem ack, reaproveitando a decisão gravada em `route_decisions` (sem nova chamada ao roteador), como já aceito na D19. 3) Roteador reprovado duas vezes: `NEEDS_REVIEW (invalid_proposal)`, tentativa `DONE` e o código em `analysis_attempts.error` no formato `router: <schema_invalid ou ungrounded_claim>: <detalhe>`, mais o log; nenhuma linha em `route_decisions` nem em `proposals`. A coluna `analysis_attempts.error` passa a significar "motivo da falha da tentativa, técnica ou do modelo". 4) `issue_cases.category` é gravada com a categoria do roteador logo depois da decisão, na mesma transação que grava `route_decisions`, para qualquer categoria, inclusive `indeterminado` (a Spec D persiste a decisão "para que a API de consulta mostre a categoria"); se o roteador falhar, fica `NULL` quando o roteador nunca decidiu; numa tentativa manual (`enrich`, `reprocess`, `author_edit`), a categoria da última decisão válida permanece (esclarecido na D21). A categoria do roteador permanece mesmo que o especialista conclua `nao_procede` (Spec D) |
 | D21 | Escolhas do subagente na Etapa 6 | **Validada pelo usuário em 2026-11-17.** 1) Roteador reprovado duas vezes gera o log `triage.proposal_invalid` com `validation_error = <código>` e `stage = "router"`, o mesmo evento do validador. 2) Falha do roteador numa tentativa manual não apaga `issue_cases.category`: fica `NULL` só se o roteador nunca decidiu; senão, permanece a categoria da última decisão válida (texto da D20 esclarecido; teste na Etapa 7). 3) O cliente `anthropic` usa `max_retries=0`: as novas tentativas ficam só no consumidor (`ANALYSIS_RETRY_DELAYS_S`, Etapa 10), sem somar com as do SDK; até a Etapa 10, erro do provedor devolve a mensagem para a fila pelo laço de reconexão. 4) `analysis_attempts.error` é gravado também quando a tentativa termina como superada: o `error` descreve a falha daquela tentativa e o `outcome` diz que ela foi superada. Escolhas internas aceitas: `<` e `>` da issue e do enriquecimento viram `&lt;` e `&gt;` no prompt; evidência vazia fora de `indeterminado` é `ungrounded_claim`; a comparação colapsa espaços e usa `casefold`; resposta sem a ferramenta vira `{}` e `schema_invalid`; constante `ROUTER_PROMPT_VERSION`; `save_route_decision` com `ON CONFLICT DO NOTHING`; textos de H01 a H03 representativos (os textos dos Casos de teste entram no conjunto de avaliação da Etapa 13). **Corrigida:** a comparação da evidência desfaz `&lt;` e `&gt;` (na evidência e no texto) antes de procurar no título e na descrição originais, para que uma evidência com `<div>` citada da issue não vire `ungrounded_claim`; correção no primeiro item da Etapa 7 |
+| D22 | Ferramentas e saída do especialista (lacunas da Etapa 7) | **Validada pelo usuário em 2026-11-17.** Contrato completo em "Contratos > Especialistas > Contrato das ferramentas e da saída": respostas em JSON, erros com `is_error` e códigos fixos, limite de leitura somando `read_doc` e `search_docs`, chamada que estoura recusada e sessão encerrada na hora, só `.md` da pasta sem subpastas em ordem alfabética, trecho de 300 caracteres centrado na linha, `query` vazia recusada, leitura em modo texto (LF) e o modelo `SpecialistOutput` literal. `.gitattributes` com `catalog/source/** text eol=lf`. Os quatro `*-architecture.md` entram na Base de conhecimento |
 
 ## Contratos
 
@@ -172,6 +173,58 @@ Sua resposta anterior foi recusada: $codigo: $detalhe. Responda de novo seguindo
 - Ferramentas (servidor MCP em processo, presas a `CATALOG_SOURCE_DIR/<nome do repositório>`, sem argumento de repositório): `list_docs` (até 50 arquivos), `search_docs(query)` (D11), `read_doc(path, offset?)` (até 4.000 caracteres; recusa `..`, caminho absoluto e arquivo fora da pasta). Bug: `search_docs`, `read_doc`. Melhoria: `list_docs`, `read_doc`. Domínio: as três. Ferramentas embutidas do SDK desligadas.
 - Limites: `SPECIALIST_MAX_TURNS` (6), `SPECIALIST_MAX_TOOL_CALLS` (8, contador nas ferramentas), `SPECIALIST_MAX_BUDGET_USD` (0,05), `SPECIALIST_MAX_READ_CHARS` (20.000 somados, contador nas ferramentas), `SPECIALIST_TIMEOUT_S` (90, falha técnica). Estouro de turnos, ferramentas, custo ou leitura → `NEEDS_REVIEW (invalid_proposal)` com `limit_exceeded:<turns|tool_calls|budget|read_chars>`, sem segunda chance.
 - Cada chamada de ferramenta vai para `proposals.tool_calls` com nome, argumentos, duração, tamanho do retorno e se houve corte; a saída bruta vai para `raw_output`, mesmo reprovada.
+
+#### Contrato das ferramentas e da saída (D22)
+
+**Arquivos visíveis.** As três ferramentas só enxergam arquivos `.md` diretamente na pasta `CATALOG_SOURCE_DIR/<repositório>` (sem subpastas, como a Base de conhecimento), em ordem alfabética do nome. Os arquivos são lidos em modo texto do Python (UTF-8, quebras de linha normalizadas para LF); o validador lê do mesmo jeito, pela mesma função.
+
+**Respostas** (JSON no conteúdo de texto do resultado MCP):
+
+| Ferramenta | Resposta |
+|---|---|
+| `list_docs()` | `{"files": ["a.md", ...], "truncated": false}`: até 50 nomes; `truncated` diz se havia mais |
+| `search_docs(query)` | `{"matches": [{"path": "a.md", "line": 12, "snippet": "..."}], "truncated": false}`: até 10, na ordem arquivo → linha |
+| `read_doc(path, offset = 0)` | `{"path": "a.md", "offset": 0, "content": "...", "truncated": true, "next_offset": 4000}`: até 4.000 caracteres a partir de `offset`; `next_offset` é nulo quando o arquivo acabou |
+
+**Busca.** A `query` é dividida por espaços em branco; os termos e as linhas são comparados após `casefold` e remoção de acentos (NFKD sem marcas combinantes). Uma linha conta se tem todos os termos. O `snippet` é uma janela de até 300 caracteres do texto do arquivo centrada no meio da linha encontrada (a linha inteira quando ela já tem 300 caracteres ou mais é cortada nos 300 primeiros), sem passar do início nem do fim do arquivo.
+
+**Erros.** Resultado MCP com `is_error = true` e o conteúdo `{"error": "<código>", "detail": "<frase em inglês>"}`:
+
+| Código | Quando |
+|---|---|
+| `path_not_allowed` | `..`, caminho absoluto, subpasta, arquivo que não é `.md` ou fora da pasta |
+| `file_not_found` | arquivo `.md` válido que não existe |
+| `empty_query` | `query` vazia ou só com espaços |
+| `limit_exceeded` | a chamada passaria `SPECIALIST_MAX_TOOL_CALLS` ou `SPECIALIST_MAX_READ_CHARS`; `detail` diz qual |
+
+**Limites.** `SPECIALIST_MAX_READ_CHARS` soma o `content` de cada `read_doc` e os `snippet` de cada `search_docs` (nomes do `list_docs` não contam). A chamada que passaria do limite de leitura, ou a de número `SPECIALIST_MAX_TOOL_CALLS + 1`, não é executada: devolve `limit_exceeded`, entra em `tool_calls` com o erro, e o harness encerra a sessão do SDK na hora, ignorando qualquer saída do modelo; o resultado é `NEEDS_REVIEW (invalid_proposal)` com `limit_exceeded:read_chars` ou `limit_exceeded:tool_calls`. Erros `path_not_allowed`, `file_not_found` e `empty_query` contam como chamada, mas não encerram a sessão.
+
+**Nomes.** Servidor MCP em processo chamado `catalog`; as ferramentas aparecem para o modelo como `mcp__catalog__list_docs`, `mcp__catalog__search_docs` e `mcp__catalog__read_doc`, e `tool_calls` guarda o nome curto (`list_docs`, `search_docs`, `read_doc`).
+
+**Saída do especialista** (modelo Pydantic `SpecialistOutput`, usado no `output_format` e na checagem 1 do validador):
+
+```python
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+class Evidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: Literal["issue", "catalog"]
+    ref: str = Field(min_length=1)          # issue: "title" ou "description"; catalog: nome do arquivo .md
+    quote: str = Field(min_length=1, max_length=300)
+
+class SpecialistOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    category: Literal["bug", "melhoria", "duvida"]
+    summary: str = Field(min_length=1, max_length=500)
+    next_step: str = Field(min_length=1, max_length=500)
+    conclusion: Literal["procede", "nao_procede", "sem_informacao"]
+    conclusion_reason: str = Field(min_length=1, max_length=500)
+    answer: str | None = Field(max_length=1000)   # obrigatório no JSON; null fora do especialista de domínio
+    evidence: list[Evidence] = Field(max_length=10)
+```
+
+Todos os campos são obrigatórios no JSON (inclusive `answer`, que pode ser `null`). Regras que dependem do especialista ficam no validador (Issue Triage Spec, seção 3): `answer` preenchido só no domínio (no domínio, `answer` nulo é `schema_invalid`), `ref` de `issue` só `title` ou `description`, e pelo menos uma evidência do catálogo salvo com `sem_informacao`.
 
 ### Validador (Issue Triage Spec, seção 3)
 | # | Checagem | `validation_error` |
@@ -505,10 +558,10 @@ Cópias dos arquivos de `../../MechanicalHub/`, sem alteração de conteúdo:
 
 | Pasta | Arquivos |
 |---|---|
-| `mechanical-hub-orders` | `guidelines/microservices/mechanical-hub-orders-spec.md`, `business/order_status.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
-| `mechanical-hub-billing` | `guidelines/microservices/mechanical-hub-billing-spec.md`, `design/integrations/mp_payment_api_integration.md`, `design/distributedTransaction/td_finished_os.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
-| `mechanical-hub-stock` | `guidelines/microservices/mechanical-hub-stock-spec.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
-| `mechanical-hub-orchestrator` | `guidelines/microservices/mechanical-hub-orchestrator-spec.md`, `design/saga_transaction_status.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md` |
+| `mechanical-hub-orders` | `mechanical-hub-orders-architecture.md` (arquitetura do serviço, incluída pela D22), `guidelines/microservices/mechanical-hub-orders-spec.md`, `business/order_status.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
+| `mechanical-hub-billing` | `mechanical-hub-billing-architecture.md` (arquitetura do serviço, incluída pela D22), `guidelines/microservices/mechanical-hub-billing-spec.md`, `design/integrations/mp_payment_api_integration.md`, `design/distributedTransaction/td_finished_os.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
+| `mechanical-hub-stock` | `mechanical-hub-stock-architecture.md` (arquitetura do serviço, incluída pela D22), `guidelines/microservices/mechanical-hub-stock-spec.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md`, `design/seed_catalog.md` |
+| `mechanical-hub-orchestrator` | `mechanical-hub-orchestrator-architecture.md` (arquitetura do serviço, incluída pela D22), `guidelines/microservices/mechanical-hub-orchestrator-spec.md`, `design/saga_transaction_status.md`, `design/distributedTransaction/td_finished_os.md`, `td_stock_pending.md`, `td_budget_refused.md`, `td_payment_failed.md`, `design/failure_handling.md` |
 
 Ficam de fora: documentos de autenticação, infraestrutura, pipeline, ADRs, RFCs, `data_model.md` (longo e transversal; entra depois se os testes mostrarem falta) e `future_requirements.md`. Os nomes dos arquivos são mantidos (sem subpastas) para que as evidências citem nomes estáveis.
 
@@ -568,13 +621,14 @@ Requisitos: RF12, RF13, RF18, RNF04, RNF09. Depende de: Etapa 4. Pré-condição
 - [x] Testes unitários com o fake: cada regra de validação; nova chamada uma só vez; `</issue>` dentro do texto é neutralizado. Testes de integração: retomada com decisão gravada não chama o fake; `indeterminado` (casos H01 a H03) termina em revisão sem proposta.
 
 ### Etapa 7 — Ferramentas e harness do especialista
-Requisitos: RF14, RF15, RNF10, RNF11. Depende de: Etapa 3. Pré-condição: decisões D10, D11, D17 e D21 validadas.
+Requisitos: RF14, RF15, RNF10, RNF11. Depende de: Etapa 3. Pré-condição: decisões D10, D11, D17, D21 e D22 validadas.
+- [ ] Commitar os quatro `catalog/source/*/*-architecture.md` (D22) e criar `.gitattributes` com `catalog/source/** text eol=lf`.
 - [ ] Correção da D21 na Etapa 6 (evidência): desfazer `&lt;` e `&gt;` antes de comparar a evidência do roteador com o título e a descrição originais; teste com issue que cita `<div>` e evidência copiada dela, aprovada (RF13).
 - [ ] Correção da D21 na Etapa 6 (categoria): teste de integração em que um `reprocess` de caso com categoria `bug` tem o roteador reprovado duas vezes; o caso vai para `NEEDS_REVIEW (invalid_proposal)` e `category` continua `bug`.
-- [ ] `list_docs`, `search_docs` (D11) e `read_doc` presas à pasta do repositório do caso, com os limites de retorno da Issue Triage Spec e recusa de `..`, caminho absoluto e arquivo fora da pasta.
-- [ ] Contadores de chamadas e de caracteres lidos; acima do limite a ferramenta devolve erro e a execução termina com `limit_exceeded:tool_calls` ou `limit_exceeded:read_chars`.
+- [ ] `list_docs`, `search_docs` (D11) e `read_doc` presas à pasta do repositório do caso, conforme "Contrato das ferramentas e da saída" (D22): respostas em JSON, erros com `is_error` e códigos fixos, só `.md` sem subpastas, trecho centrado na linha, leitura em modo texto.
+- [ ] Contadores de chamadas e de caracteres lidos (D22): a chamada que estoura é recusada com `limit_exceeded`, entra em `tool_calls` e o harness encerra a sessão na hora, com `limit_exceeded:tool_calls` ou `limit_exceeded:read_chars`.
 - [ ] Registro de cada chamada (nome, argumentos, duração, tamanho, corte) para `tool_calls`.
-- [ ] Porta `SpecialistRunner`, fake e adaptador real com o `claude-agent-sdk`: servidor MCP em processo com só as ferramentas da lista do especialista, ferramentas embutidas desligadas, `max_turns`, `max_budget_usd`, `output_format` com o JSON da seção 1 da Issue Triage Spec, e tempo `SPECIALIST_TIMEOUT_S`. Mapear o motivo de parada do SDK para `limit_exceeded:turns` e `limit_exceeded:budget`.
+- [ ] Porta `SpecialistRunner`, fake e adaptador real com o `claude-agent-sdk`: servidor MCP em processo com só as ferramentas da lista do especialista, ferramentas embutidas desligadas, `max_turns`, `max_budget_usd`, `output_format` gerado de `SpecialistOutput` (D22), e tempo `SPECIALIST_TIMEOUT_S`. Mapear o motivo de parada do SDK para `limit_exceeded:turns` e `limit_exceeded:budget`.
 - [ ] Testes unitários das ferramentas em uma pasta temporária: travessia de caminho recusada, corte em 4.000 caracteres, limite de 50 arquivos, busca com acento e maiúscula, contadores. Teste do adaptador real só da montagem das opções (sem chamar a API).
 
 ### Etapa 8 — Especialistas, contexto acumulado e validador
@@ -630,7 +684,7 @@ Divergências entre documentos e lacunas. Cada decisão tomada aqui deve voltar 
 | P1 | Formato da mensagem de encerramento (`close`) na fila `analysis` | A Modelagem de dados (decisão 2) diz que o `close` segue pela fila `analysis` com `dedup_key = '<eventId>:close'`, mas não define o payload, e `analysis_attempts.trigger` não aceita `close`. Também falta, no plano do issue-analyst-api, o endpoint de resolução que produz `enrich`, `reprocess` e `close` (RF29) | Etapa 11 (as Etapas 4 a 10 tratam `enrich` e `reprocess` pelo contrato atual) |
 | P2 | Ordem das migrações no ambiente integrado | A view `inbound.issue_presentation` (dona: issue-analyst-api) lê `triage` e `publisher`; a migração dela falha se esses schemas ainda não existirem | Etapa 13 |
 | P3 | Casos de teste no domínio da oficina | Os Casos de teste usam um catálogo fictício (`equipe/projeto-teste`); precisam ser reescritos para os repositórios do catálogo antes da avaliação | Etapa 13 (`issues.yaml` e avaliação) |
-| P4 | Recursos do Claude Agent SDK | O High Level Design assume `max_turns`, `max_budget_usd`, `output_format`, servidor MCP em processo e `disallowed_tools`; confirmar os nomes na versão instalada na Etapa 1 e registrar aqui | Etapa 7, se algum recurso não existir |
+| P4 | Recursos do Claude Agent SDK | **Resolvido em 2026-11-17:** o `claude-agent-sdk` 0.2.183 instalado tem `max_turns`, `max_budget_usd`, `output_format`, `disallowed_tools`, servidor MCP em processo, `structured_output` e `total_cost_usd`, todos usados pelo plano | — |
 
 ## Fora do escopo
 
