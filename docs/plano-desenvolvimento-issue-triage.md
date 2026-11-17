@@ -742,10 +742,10 @@ Requisitos: RF29. Depende de: Etapa 4. Pré-condição: P1 decidido (resolvido e
 
 ### Etapa 12 — Observabilidade
 Requisitos: RNF14. Depende de: Etapa 10.
-- [ ] Correção da D30 (Etapa 11): `triggerRef` do `close` que não seja só dígitos, com valor positivo, é recusado pelo modelo Pydantic da mensagem (`invalid_schema`); teste com `triggerRef = "abc"`, `"0"` e `"-1"` (descartados sem tocar no banco) e com id numérico sem linha (`review_not_found`).
-- [ ] Os eventos de "Contratos > Logs", com `event_id`, `repository`, `issue_number` e `attempt` ligados ao contexto do structlog durante cada mensagem.
-- [ ] Nenhum log contém a chave, o prompt de sistema, o token da checagem 8 nem o texto completo da issue.
-- [ ] Testes com `structlog.testing.capture_logs` cobrindo cada evento e as ausências.
+- [x] Correção da D30 (Etapa 11): `triggerRef` do `close` que não seja só dígitos, com valor positivo, é recusado pelo modelo Pydantic da mensagem (`invalid_schema`); teste com `triggerRef = "abc"`, `"0"` e `"-1"` (descartados sem tocar no banco) e com id numérico sem linha (`review_not_found`).
+- [x] Os eventos de "Contratos > Logs", com `event_id`, `repository`, `issue_number` e `attempt` ligados ao contexto do structlog durante cada mensagem.
+- [x] Nenhum log contém a chave, o prompt de sistema, o token da checagem 8 nem o texto completo da issue.
+- [x] Testes com `structlog.testing.capture_logs` cobrindo cada evento e as ausências.
 
 ### Etapa 13 — Ambiente integrado, avaliação e demonstração
 Requisitos: RF12 a RF16, RNF13, RNF17, RNF18. Depende de: Etapa 12 e dos pré-requisitos 2 (D18) e 3 (chave de API com crédito). Pré-condição: decisão D18 validada e P2 decidido.

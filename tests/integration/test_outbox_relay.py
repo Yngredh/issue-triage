@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 import aio_pika
 import psycopg
 import pytest
+import structlog
 from aio_pika.abc import AbstractIncomingMessage
 from aio_pika.exceptions import ChannelPreconditionFailed
 from psycopg.types.json import Jsonb
@@ -253,3 +254,26 @@ async def test_broker_down_keeps_rows_pending_until_it_returns(
 
         delivered = [m.message_id for m in await _drain(url) if m.message_id in pending]
         assert delivered == pending
+
+
+async def test_published_and_publish_failed_logs(
+    pool, database_url, rabbitmq_url, outbox_cleanup
+) -> None:
+    await _drain(rabbitmq_url)
+    keys = _insert_outbox(database_url, 1)
+    with structlog.testing.capture_logs() as logs:
+        await _run_until_all_published([_relay(pool, rabbitmq_url)], database_url, keys)
+        # Broker inalcançável, com senha na URL: só o tipo do erro vai para o log.
+        bad = _relay(pool, f"amqp://user:senha-secreta@127.0.0.1:{_free_port()}/")
+        await _with_relays(
+            [bad],
+            lambda: _wait_until(lambda: any(e["event"] == "outbox.publish_failed" for e in logs)),
+        )
+
+    [published] = [e for e in logs if e["event"] == "outbox.published"]
+    assert published["dedup_key"] == keys[0]
+    assert published["event_id"].startswith("relay-")
+    failed = [e for e in logs if e["event"] == "outbox.publish_failed"]
+    assert failed
+    assert {e["stage"] for e in failed} == {"connect"}
+    assert "senha-secreta" not in repr(logs)

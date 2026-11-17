@@ -4,6 +4,8 @@ from psycopg import AsyncConnection
 
 from issue_triage.domain.issue import CloseReview, IssueText, OriginEvent, is_blank
 
+_BIGINT_MAX = 2**63 - 1  # id acima disso não existe em `bigint`: `review_not_found`
+
 
 async def find_origin_event(conn: AsyncConnection, event_id: str) -> OriginEvent | None:
     """Devolve o `issue.created` de origem com esse `event_id`, ou `None` se não existir."""
@@ -60,7 +62,7 @@ async def find_close_review(
     `review_ref` é o `triggerRef` da mensagem. Devolve `None` se o id não for numérico, se a
     linha não existir, se não for um `close` ou se pertencer a outro evento.
     """
-    if not review_ref.isascii() or not review_ref.isdigit():
+    if not review_ref.isascii() or not review_ref.isdigit() or int(review_ref) > _BIGINT_MAX:
         return None
     cur = await conn.execute(
         "SELECT id, final_status FROM inbound.issue_review_history "

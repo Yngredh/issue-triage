@@ -32,6 +32,9 @@ from issue_triage.domain.templates import render_missing_info, render_triage
 
 logger = structlog.get_logger()
 
+# Chaves ligadas ao contexto do structlog durante uma mensagem ("Contratos > Logs").
+_CONTEXT_KEYS = ("event_id", "repository", "issue_number", "attempt")
+
 T = TypeVar("T")
 
 
@@ -86,30 +89,39 @@ class AnalysisProcessor:
             )
             return Outcome.ACK
 
-        log = logger.bind(event_id=message.event_id)
-        log.info("analysis.received", trigger=message.trigger)
+        structlog.contextvars.bind_contextvars(event_id=message.event_id)
+        try:
+            return await self._process(message, retries)
+        finally:
+            structlog.contextvars.unbind_contextvars(*_CONTEXT_KEYS)
+
+    async def _process(self, message: AnalysisMessage, retries: Iterator[float]) -> Outcome:
+        """Passos 2 a 8 de "Processamento"; o contexto de log já leva o `event_id`."""
+        logger.info("analysis.received", trigger=message.trigger)
 
         async with self._pool.connection() as conn:
             # Passos 2 e 3: evento de origem e abertura ou retomada da tentativa (commit 1, D15).
             async with conn.transaction():
                 origin = await find_origin_event(conn, message.event_id)
                 if origin is None:
-                    log.warning("analysis.discarded_invalid", reason="origin_not_found")
+                    logger.warning("analysis.discarded_invalid", reason="origin_not_found")
                     return Outcome.ACK
-                log = log.bind(repository=origin.repository, issue_number=origin.issue_number)
+                structlog.contextvars.bind_contextvars(
+                    repository=origin.repository, issue_number=origin.issue_number
+                )
                 if message.trigger == "close":
-                    return await self._close(conn, message, origin, log)
+                    return await self._close(conn, message, origin)
                 opened = await self._open(conn, message, origin)
 
             if opened is None:
-                log.warning("analysis.discarded_invalid", reason="case_not_found")
+                logger.warning("analysis.discarded_invalid", reason="case_not_found")
                 return Outcome.ACK
             if isinstance(opened, triage_store.Skipped):
-                log.info(opened.event, trigger=message.trigger, message_attempt=message.attempt)
+                logger.info(opened.event, trigger=message.trigger, message_attempt=message.attempt)
                 return Outcome.ACK
-            log = log.bind(attempt=opened.attempt)
+            structlog.contextvars.bind_contextvars(attempt=opened.attempt)
             if opened.resumed:
-                log.info("analysis.resumed")
+                logger.info("analysis.resumed")
 
             # Passo 4: checagens sem IA (harness); o resultado é gravado no commit 3 (D15).
             async with conn.transaction():
@@ -125,7 +137,7 @@ class AnalysisProcessor:
                         status_reason="unknown_repo",
                         max_manual_attempts=self._max_manual_attempts,
                     )
-                    self._log_finished(log, "triage.unknown_repo", finished)
+                    self._log_finished("triage.unknown_repo", finished)
                     return Outcome.ACK
 
                 text = await read_issue_text(conn, origin)
@@ -147,7 +159,7 @@ class AnalysisProcessor:
                         max_manual_attempts=self._max_manual_attempts,
                         missing_info=triage_store.MissingInfoProposal(comment),
                     )
-                    self._log_finished(log, "triage.empty_description", finished)
+                    self._log_finished("triage.empty_description", finished)
                     return Outcome.ACK
 
                 stored = await triage_store.find_route_decision(conn, opened.attempt_id)
@@ -159,7 +171,6 @@ class AnalysisProcessor:
             if stored is None:
                 try:
                     result = await self._call_provider(
-                        log,
                         "router",
                         retries,
                         lambda: route(
@@ -172,7 +183,7 @@ class AnalysisProcessor:
                         ),
                     )
                 except _TechnicalFailed as failed:
-                    return await self._technical_failure(conn, log, opened, origin, failed)
+                    return await self._technical_failure(conn, opened, origin, failed)
                 if isinstance(result, RouterFailed):
                     async with conn.transaction():
                         finished = await triage_store.finish_attempt(
@@ -187,7 +198,7 @@ class AnalysisProcessor:
                             error=result.rejection.error,
                         )
                     if finished.applied:
-                        log.info(
+                        logger.info(
                             "triage.proposal_invalid",
                             validation_error=result.rejection.code,
                             stage="router",
@@ -195,7 +206,7 @@ class AnalysisProcessor:
                             status_reason=finished.status_reason,
                         )
                     elif finished.outcome == "duplicate":
-                        log.info("analysis.skipped_duplicate")
+                        logger.info("analysis.skipped_duplicate")
                     return Outcome.ACK
 
                 async with conn.transaction():
@@ -207,7 +218,7 @@ class AnalysisProcessor:
                         prompt_version=ROUTER_PROMPT_VERSION,
                         model=self._router.model,
                     )
-                log.info(
+                logger.info(
                     "triage.routed",
                     category=stored.decision.category,
                     llm_calls=stored.llm_calls,
@@ -226,13 +237,12 @@ class AnalysisProcessor:
                         max_manual_attempts=self._max_manual_attempts,
                     )
                 if finished.outcome == "duplicate":
-                    log.info("analysis.skipped_duplicate")
+                    logger.info("analysis.skipped_duplicate")
                 return Outcome.ACK
 
             # Passos 6 e 7: especialista e validador, fora de transação (D15).
             try:
                 outcome = await self._call_provider(
-                    log,
                     "specialist",
                     retries,
                     lambda: run_specialist(
@@ -247,15 +257,15 @@ class AnalysisProcessor:
                     ),
                 )
             except _TechnicalFailed as failed:
-                return await self._technical_failure(conn, log, opened, origin, failed)
+                return await self._technical_failure(conn, opened, origin, failed)
 
             # Passo 8: commit 3 (D15).
             async with conn.transaction():
                 finished = await self._finish_specialist(conn, opened, origin, project, outcome)
             if finished.outcome == "duplicate":
-                log.info("analysis.skipped_duplicate")
+                logger.info("analysis.skipped_duplicate")
             elif finished.applied and outcome.rejection is None:
-                log.info(
+                logger.info(
                     "triage.proposal_validated",
                     specialist=outcome.specialist,
                     llm_calls=outcome.llm_calls,
@@ -263,7 +273,7 @@ class AnalysisProcessor:
                     status_reason=finished.status_reason,
                 )
             elif finished.applied and outcome.rejection is not None:
-                log.info(
+                logger.info(
                     "triage.proposal_invalid",
                     validation_error=outcome.rejection.code,
                     stage="specialist",
@@ -274,7 +284,6 @@ class AnalysisProcessor:
 
     async def _call_provider(
         self,
-        log: Any,
         stage: str,
         retries: Iterator[float],
         call: Callable[[], Awaitable[T]],
@@ -292,13 +301,14 @@ class AnalysisProcessor:
             delay = next(retries, None) if failure.transient else None
             if delay is None:
                 raise _TechnicalFailed(failure.error, stage)
-            log.warning("triage.retry_scheduled", stage=stage, error=failure.error, delay_s=delay)
+            logger.warning(
+                "triage.retry_scheduled", stage=stage, error=failure.error, delay_s=delay
+            )
             await asyncio.sleep(delay)
 
     async def _technical_failure(
         self,
         conn: AsyncConnection,
-        log: Any,
         opened: triage_store.OpenedAttempt,
         origin: OriginEvent,
         failed: _TechnicalFailed,
@@ -317,9 +327,9 @@ class AnalysisProcessor:
                 error=failed.error,
             )
         if finished.outcome == "duplicate":
-            log.info("analysis.skipped_duplicate")
+            logger.info("analysis.skipped_duplicate")
         elif finished.applied:
-            log.error(
+            logger.error(
                 "triage.technical_failure",
                 stage=failed.stage,
                 error=failed.error,
@@ -409,15 +419,15 @@ class AnalysisProcessor:
         )
 
     @staticmethod
-    def _log_finished(log: Any, event: str, finished: triage_store.FinishedAttempt) -> None:
+    def _log_finished(event: str, finished: triage_store.FinishedAttempt) -> None:
         if finished.outcome == "duplicate":
-            log.info("analysis.skipped_duplicate")
+            logger.info("analysis.skipped_duplicate")
         elif finished.applied:
-            log.info(event, status=finished.outcome, status_reason=finished.status_reason)
+            logger.info(event, status=finished.outcome, status_reason=finished.status_reason)
 
     @staticmethod
     async def _close(
-        conn: AsyncConnection, message: AnalysisMessage, origin: OriginEvent, log: Any
+        conn: AsyncConnection, message: AnalysisMessage, origin: OriginEvent
     ) -> Outcome:
         """`close` (RF29, P1): passo 3 de "Processamento"; não abre tentativa nem chama a IA.
 
@@ -427,13 +437,13 @@ class AnalysisProcessor:
         assert message.trigger_ref is not None
         review = await find_close_review(conn, message.trigger_ref, origin.event_id)
         if review is None:
-            log.warning("analysis.discarded_invalid", reason="review_not_found")
+            logger.warning("analysis.discarded_invalid", reason="review_not_found")
             return Outcome.ACK
         closed = await triage_store.close_case(conn, event_id=origin.event_id, review=review)
         if closed is None:
-            log.warning("analysis.discarded_invalid", reason="case_not_found")
+            logger.warning("analysis.discarded_invalid", reason="case_not_found")
         elif closed.event == "triage.case_closed":
-            log.info(
+            logger.info(
                 closed.event,
                 status=closed.status,
                 status_reason=closed.status_reason,
@@ -441,5 +451,5 @@ class AnalysisProcessor:
                 review_id=review.review_id,
             )
         else:
-            log.info(closed.event, trigger="close", review_id=review.review_id)
+            logger.info(closed.event, trigger="close", review_id=review.review_id)
         return Outcome.ACK

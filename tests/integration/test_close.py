@@ -180,7 +180,7 @@ async def test_close_with_missing_or_foreign_review_is_discarded(
             close_message(origin, 999999),  # inexistente
             close_message(origin, foreign.id),  # de outro evento
             close_message(origin, not_close.id),  # não é close
-            close_message(origin, "abc"),  # id não numérico
+            close_message(origin, 2**63),  # além do bigint: não existe linha
         )
 
     assert outcomes == [Outcome.ACK] * 4
@@ -203,3 +203,22 @@ async def test_close_for_a_case_that_does_not_exist_is_discarded(
     assert case_row(db, origin.event_id) is None
     discarded = [entry for entry in logs if entry["event"] == "analysis.discarded_invalid"]
     assert [entry["reason"] for entry in discarded] == ["case_not_found"]
+
+
+@pytest.mark.parametrize("ref", ["abc", "0", "-1", "1.5", " 7", "7 ", "0x1"])
+async def test_close_with_non_numeric_or_non_positive_ref_is_invalid_schema(
+    pool, rabbitmq_url, broker, committed_data: TestData, db, ref
+) -> None:
+    """D30: o modelo da mensagem recusa; o banco nem é consultado."""
+    origin = await open_case(pool, rabbitmq_url, broker, committed_data)
+    committed_data.review(origin, action="close")
+    before = case_row(db, origin.event_id)
+
+    with structlog.testing.capture_logs() as logs:
+        outcomes = await consume(pool, rabbitmq_url, broker, close_message(origin, ref))
+
+    assert outcomes == [Outcome.ACK]
+    discarded = [entry for entry in logs if entry["event"] == "analysis.discarded_invalid"]
+    assert [entry["reason"] for entry in discarded] == ["invalid_schema"]
+    assert [entry["event"] for entry in logs] == ["analysis.discarded_invalid"]
+    assert case_row(db, origin.event_id) == before

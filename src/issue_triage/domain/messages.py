@@ -14,6 +14,11 @@ Trigger = Literal["initial", "author_edit", "enrich", "reprocess", "close"]
 TRIGGERS_WITH_REF = frozenset({"author_edit", "enrich", "reprocess", "close"})
 
 
+def _is_positive_id(value: str | None) -> bool:
+    """Só dígitos ASCII com valor positivo (D30)."""
+    return value is not None and value.isascii() and value.isdigit() and int(value) > 0
+
+
 class Outcome(StrEnum):
     """O que o consumidor faz com a mensagem depois do processamento."""
 
@@ -41,4 +46,6 @@ class AnalysisMessage(BaseModel):
             raise ValueError("attempt is required")
         if self.trigger in TRIGGERS_WITH_REF and not self.trigger_ref:
             raise ValueError("triggerRef is required")
+        if self.trigger == "close" and not _is_positive_id(self.trigger_ref):
+            raise ValueError("triggerRef must be the numeric id of a review")
         return self
