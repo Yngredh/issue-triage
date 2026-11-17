@@ -129,7 +129,57 @@ Regra de fechamento: quando o resultado seria `NEEDS_REVIEW` e `manual_attempts 
 Para na primeira que reprova. Reprovada uma vez → nova chamada do especialista na mesma tentativa, com a proposta anterior e o motivo como dado (log `triage.specialist_retry`). Reprovada de novo → `INVALID`. Não há terceira chamada.
 
 ### Templates (Issue Triage Spec, seção 4)
-Constantes `string.Template` em `src/issue_triage/domain/templates.py`; o texto final vai em `proposals.comment_body`. Triagem: título com o rótulo da categoria, projeto e responsável de `catalog.projects`, resumo, bloco de resposta (só domínio), próximo passo, bloco de conclusão (`nao_procede` e `sem_informacao`), evidências em `<details>`, rodapé e o marcador `<!-- triage:$event_id:$revision -->`. Pedido de informações: texto fixo com `$projeto`, `$responsavel` e o marcador. Antes de entrar no template, todo texto do modelo é limpo: remove HTML, `<!--` e `-->`, `@menções` que não sejam do responsável, e corta no tamanho máximo. `revision` = `attempt` que gerou a proposta. O texto literal dos dois templates é o da Issue Triage Spec e deve ser copiado sem alteração.
+Constantes `string.Template` em `src/issue_triage/domain/templates.py`; o texto final vai em `proposals.comment_body`. Triagem: título com o rótulo da categoria, projeto e responsável de `catalog.projects`, resumo, bloco de resposta (só domínio), próximo passo, bloco de conclusão (`nao_procede` e `sem_informacao`), evidências em `<details>`, rodapé e o marcador `<!-- triage:$event_id:$revision -->`. Pedido de informações: texto fixo com `$projeto`, `$responsavel` e o marcador. Antes de entrar no template, todo texto do modelo é limpo: remove HTML, `<!--` e `-->`, `@menções` que não sejam do responsável, e corta no tamanho máximo. `revision` = `attempt` que gerou a proposta. O texto literal dos dois templates está abaixo, copiado da Issue Triage Spec, seção 4 (revisão 16, de 2026-11-17), para que os agentes não dependam de ler o claude.ai. Ele vai para `templates.py` sem alteração: mesmas quebras de linha e mesmos placeholders (os nomes de placeholder não têm acento, como `$bloco_conclusao`). Se a Issue Triage Spec mudar esses textos, este bloco é atualizado aqui primeiro.
+
+**Triagem (RF19)**, constante `TRIAGE_TEMPLATE`:
+
+````markdown
+## Triagem automática: $categoria_rotulo
+
+**Projeto:** $projeto · **Responsável:** $responsavel
+
+**Resumo**
+$summary
+
+$bloco_resposta
+**Próximo passo**
+$next_step
+
+$bloco_conclusao
+<details><summary>Evidências</summary>
+
+$lista_evidencias
+</details>
+
+---
+<sub>Comentário gerado automaticamente pelo assistente de triagem. Ele não corrige código nem altera esta issue.</sub>
+<!-- triage:$event_id:$revision -->
+````
+
+Placeholders da triagem:
+- `$categoria_rotulo`: `Bug`, `Melhoria` ou `Dúvida`. `$projeto` e `$responsavel` vêm de `catalog.projects`.
+- `$bloco_resposta`: só no especialista de domínio, como `**Resposta**` seguida de `answer`; vazio nos demais.
+- `$bloco_conclusao`: com `nao_procede`, "Pela documentação do projeto, o comportamento relatado parece ser o esperado: " + `conclusion_reason`; com `sem_informacao`, "A documentação do projeto não cobre este ponto; o responsável vai confirmar."; com `procede`, vazio.
+- `$lista_evidencias`: uma linha por evidência, `"trecho" (descrição da issue)` ou `"trecho" (nome do arquivo)`.
+- `$summary` e `$next_step`: campos da saída do especialista, já limpos.
+
+**Pedido de informações (RF20)**, constante `MISSING_INFO_TEMPLATE`, sem IA:
+
+````markdown
+## Precisamos de mais informações
+
+Esta issue foi aberta sem descrição, então ainda não foi possível fazer a triagem.
+
+Edite a descrição contando:
+- o que você estava fazendo e em qual tela ou funcionalidade de $projeto;
+- o que esperava que acontecesse;
+- o que aconteceu, com a mensagem de erro, se houver.
+
+Assim que a descrição for editada, a triagem roda de novo automaticamente.
+
+**Responsável:** $responsavel
+<!-- triage:$event_id:$revision -->
+````
 
 ### Mensagem da fila `publish`
 ```json
@@ -437,7 +487,7 @@ Requisitos: RF09, RF10, RF11, RF20, RF28, RNF04. Depende de: Etapa 3. Pré-condi
 - [ ] Modelo Pydantic da mensagem `analysis` (contrato de "Contratos > Mensagem da fila `analysis`", sem `close` até P1).
 - [ ] Passos 1 a 3 do processamento: validação, leitura do evento de origem, abertura ou retomada da tentativa por `trigger` (`initial`, `author_edit`, `enrich`, `reprocess`), descarte de repetida, obsoleta e edição fora de estado.
 - [ ] Texto atual da issue e enriquecimentos (D14).
-- [ ] Passo 4 (harness): `unknown_repo` sem chamar a IA; descrição vazia gera a proposta `missing_info` com o template de pedido de informações (texto literal da Issue Triage Spec) e a linha na `publish_outbox`, na mesma transação.
+- [ ] Passo 4 (harness): `unknown_repo` sem chamar a IA; descrição vazia gera a proposta `missing_info` com o template de pedido de informações (`MISSING_INFO_TEMPLATE`, texto literal de "Contratos > Templates") e a linha na `publish_outbox`, na mesma transação.
 - [ ] Regra de fechamento por `MAX_MANUAL_ATTEMPTS` (RF30).
 - [ ] Consumidor da fila `analysis` com ack manual, `prefetch = ANALYSIS_PREFETCH`, ack só depois do commit; banco ou broker fora não confirma a mensagem e reconecta com backoff de 1 s a 30 s. Nesta etapa, uma issue que chegaria ao roteador fica `IN_PROGRESS` e a mensagem volta para a fila (o roteador entra na Etapa 6); o teste confere só o que esta etapa entrega.
 - [ ] Testes de integração (RabbitMQ e PostgreSQL reais): mesma mensagem entregue duas vezes abre uma só tentativa; repositório fora do catálogo vira `NEEDS_REVIEW (unknown_repo)` (caso H04); descrição vazia ou só com espaços vira `READY_TO_PUBLISH (empty_description)` com `comment_body` contendo o marcador e o responsável, e uma linha na outbox (casos H05 e H06); edição do autor em `empty_description` abre `current_attempt + 1`; edição fora desse estado e reentrega da mesma edição são ignoradas; `enrich` incrementa `manual_attempts`; resultado de revisão com `manual_attempts` no limite vira `MAX_RETRIES_REACHED`; mensagem inválida e `eventId` inexistente são descartados.
@@ -476,7 +526,7 @@ Requisitos: RF13, RF14, RF16, RF17, RF18, RF31, RNF09. Depende de: Etapas 6 e 7.
 
 ### Etapa 9 — Template de triagem e saída para publicação
 Requisitos: RF19, RF21, RNF09, RNF10. Depende de: Etapas 5 e 8.
-- [ ] Template de triagem com o texto literal da Issue Triage Spec, blocos de resposta e conclusão, lista de evidências e marcador `<!-- triage:<eventId>:<revision> -->`.
+- [ ] Template de triagem (`TRIAGE_TEMPLATE`) com o texto literal de "Contratos > Templates", blocos de resposta e conclusão, lista de evidências e marcador `<!-- triage:<eventId>:<revision> -->`.
 - [ ] Limpeza do texto do modelo antes do template (HTML, `<!--`, `-->`, `@menções` de terceiros, tamanho máximo).
 - [ ] Proposta aprovada → caso `READY_TO_PUBLISH (proposal_validated)`, categoria do roteador gravada no caso, tentativa `DONE` e linha na outbox, na mesma transação.
 - [ ] Testes de integração de ponta a ponta com os fakes e RabbitMQ real: bug, melhoria e dúvida chegam à fila `publish` (casos E01 a E04); o corpo tem exatamente um marcador e o responsável `@Yaane-h`; texto do modelo com `<!-- triage:x:9 -->` não gera segundo marcador; mensagem repetida não gera segunda proposta.
