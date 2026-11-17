@@ -26,7 +26,7 @@ Requisitos atendidos: RF09 a RF21, RF26, RF31, a aplicação do RF28 (edição d
 As seções "Contratos", "Modelo de dados" e "Catálogo" deste plano resumem o que cada etapa precisa, para que o agente não dependa de ler os documentos inteiros.
 
 **Pré-requisitos (manuais, antes da Etapa 1)**
-- [ ] Criar o esqueleto do projeto com `uv init --package --name issue-triage --python 3.12` (mesma base do issue-publisher: `config.py`, `logging.py`, `main.py`, ruff e pytest configurados) e commitar na `main` junto com este plano.
+- [x] Criar o esqueleto do projeto com `uv init --package --name issue-triage --python 3.12` (mesma base do issue-publisher: `config.py`, `logging.py`, `main.py`, ruff e pytest configurados) e commitar na `main` junto com este plano. Concluído no commit `6418ab4`.
 - [ ] Validar as "Decisões técnicas da implementação" e os "Pontos em aberto" que bloqueiam etapas (indicados em cada etapa). D1 a D17 validadas em 2026-11-17; falta D18 (só a Etapa 13).
 - [ ] Ter a chave de API do Console da Anthropic com crédito pré-pago (necessária só para a avaliação e a demonstração, Etapa 13; os testes automatizados não a usam).
 
