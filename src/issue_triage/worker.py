@@ -7,6 +7,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 import structlog
 
 from issue_triage.adapters.analysis_consumer import AnalysisConsumer
+from issue_triage.adapters.anthropic_router import AnthropicRouterLLM
 from issue_triage.adapters.database import close_pool, create_pool, open_pool
 from issue_triage.adapters.outbox_relay import OutboxRelay
 from issue_triage.analysis import AnalysisProcessor
@@ -33,14 +34,26 @@ ServicesFactory = Callable[[Settings], AbstractAsyncContextManager[None]]
 
 @asynccontextmanager
 async def worker_services(settings: Settings) -> AsyncIterator[None]:
-    """Pool do banco, consumidor da fila `analysis` e relay da `publish_outbox` (D4).
+    """Pool do banco, roteador, consumidor da fila `analysis` e relay da `publish_outbox` (D4).
+
+    O roteador usa o SDK `anthropic` com `ANTHROPIC_API_KEY`, que `main.py` exige na subida.
 
     Ativos enquanto o bloco dura. Na saída o consumidor para de consumir e termina a mensagem em
     curso, o relay para (um lote em curso é desfeito e fica pendente) e só então o pool fecha.
     """
+    if settings.ANTHROPIC_API_KEY is None:
+        raise ValueError("ANTHROPIC_API_KEY is required")
+    router = AnthropicRouterLLM(
+        settings.ANTHROPIC_API_KEY,
+        model=settings.ROUTER_MODEL,
+        max_tokens=settings.ROUTER_MAX_TOKENS,
+        timeout_s=settings.ROUTER_TIMEOUT_S,
+    )
     pool = create_pool(settings.DATABASE_URL)
     await open_pool(pool)
-    processor = AnalysisProcessor(pool, max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS)
+    processor = AnalysisProcessor(
+        pool, router=router, max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS
+    )
     consumer = AnalysisConsumer(
         processor.process, settings.RABBITMQ_URL, prefetch=settings.ANALYSIS_PREFETCH
     )

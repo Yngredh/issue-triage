@@ -559,12 +559,12 @@ Requisitos: RF21, RNF05. Depende de: Etapa 4. Pré-condição: decisões D6, D7 
 
 ### Etapa 6 — Roteador
 Requisitos: RF12, RF13, RF18, RNF04, RNF09. Depende de: Etapa 4. Pré-condição: decisões D10, D12, D14 e D20 validadas.
-- [ ] Porta `RouterLLM` e fake (D10); adaptador real com o SDK `anthropic`, saída estruturada, `max_tokens = ROUTER_MAX_TOKENS` e tempo `ROUTER_TIMEOUT_S`.
-- [ ] Prompt do roteador em `domain/prompts.py` com o texto exato de "Contratos > Roteador > Texto do roteador" (`ROUTER_SYSTEM_PROMPT`, mensagem do usuário, ferramenta `route_decision` e linha da nova chamada) e `PROMPT_VERSION = "router-v1"`.
-- [ ] Montagem da entrada: `<issue>` com título e descrição neutralizados, bloco `<enriquecimento>` (D14) e orientações do catálogo.
-- [ ] Validação (schema, tamanho de `reason`, evidência literal) e uma nova chamada com o erro no prompt; persistência em `route_decisions` antes do despacho; reutilização da decisão gravada na retomada.
-- [ ] Ligar ao fluxo: grava `issue_cases.category` junto com `route_decisions` (D20); `indeterminado` → `NEEDS_REVIEW (insufficient_content)` com `category = 'indeterminado'`; falhou duas vezes → `NEEDS_REVIEW (invalid_proposal)`, `category` nula e `analysis_attempts.error = 'router: <código>: <detalhe>'`; `bug`, `melhoria` e `duvida` deixam a tentativa `IN_PROGRESS` e devolvem a mensagem sem ack até a Etapa 8, sem nova chamada ao roteador na reentrega (D20).
-- [ ] Testes unitários com o fake: cada regra de validação; nova chamada uma só vez; `</issue>` dentro do texto é neutralizado. Testes de integração: retomada com decisão gravada não chama o fake; `indeterminado` (casos H01 a H03) termina em revisão sem proposta.
+- [x] Porta `RouterLLM` e fake (D10); adaptador real com o SDK `anthropic`, saída estruturada, `max_tokens = ROUTER_MAX_TOKENS` e tempo `ROUTER_TIMEOUT_S`.
+- [x] Prompt do roteador em `domain/prompts.py` com o texto exato de "Contratos > Roteador > Texto do roteador" (`ROUTER_SYSTEM_PROMPT`, mensagem do usuário, ferramenta `route_decision` e linha da nova chamada) e `PROMPT_VERSION = "router-v1"`.
+- [x] Montagem da entrada: `<issue>` com título e descrição neutralizados, bloco `<enriquecimento>` (D14) e orientações do catálogo.
+- [x] Validação (schema, tamanho de `reason`, evidência literal) e uma nova chamada com o erro no prompt; persistência em `route_decisions` antes do despacho; reutilização da decisão gravada na retomada.
+- [x] Ligar ao fluxo: grava `issue_cases.category` junto com `route_decisions` (D20); `indeterminado` → `NEEDS_REVIEW (insufficient_content)` com `category = 'indeterminado'`; falhou duas vezes → `NEEDS_REVIEW (invalid_proposal)`, `category` nula e `analysis_attempts.error = 'router: <código>: <detalhe>'`; `bug`, `melhoria` e `duvida` deixam a tentativa `IN_PROGRESS` e devolvem a mensagem sem ack até a Etapa 8, sem nova chamada ao roteador na reentrega (D20).
+- [x] Testes unitários com o fake: cada regra de validação; nova chamada uma só vez; `</issue>` dentro do texto é neutralizado. Testes de integração: retomada com decisão gravada não chama o fake; `indeterminado` (casos H01 a H03) termina em revisão sem proposta.
 
 ### Etapa 7 — Ferramentas e harness do especialista
 Requisitos: RF14, RF15, RNF10, RNF11. Depende de: Etapa 3. Pré-condição: decisões D10, D11 e D17 validadas.

@@ -1,4 +1,4 @@
-"""Escrita no schema `triage`: caso, tentativa, proposta e `publish_outbox` (D15).
+"""Escrita no schema `triage`: caso, tentativa, decisão do roteador, proposta e outbox (D15).
 
 Cada função roda dentro da transação aberta por quem chama; o processamento da mensagem
 (`issue_triage.analysis`) decide onde fica cada commit.
@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
+
+from issue_triage.domain.router import RouteDecision
 
 PUBLISH_TOPIC = "publish"
 SUPERSEDED = "superseded"
@@ -192,13 +194,15 @@ async def finish_attempt(
     status_reason: str,
     max_manual_attempts: int,
     missing_info: MissingInfoProposal | None = None,
+    error: str | None = None,
 ) -> FinishedAttempt:
     """Commit 3 da D15: proposta, status do caso, tentativa `DONE` e outbox, juntos (RF21).
 
     O caso é lido com `FOR UPDATE`; se a tentativa não for mais a `current_attempt`, ela termina
     `DONE` com `outcome = superseded`, sem proposta. Regra de fechamento (RF30): resultado
     `NEEDS_REVIEW` com `manual_attempts >= max_manual_attempts` vira
-    `MAX_RETRIES_REACHED (manual_attempts_exhausted)`.
+    `MAX_RETRIES_REACHED (manual_attempts_exhausted)`. `error` é o motivo da falha da
+    tentativa, técnica ou do modelo, gravado em `analysis_attempts.error` (D20).
     """
     cur = await conn.execute(
         "SELECT current_attempt, manual_attempts FROM triage.issue_cases WHERE id = %s FOR UPDATE",
@@ -213,7 +217,7 @@ async def finish_attempt(
         return FinishedAttempt(outcome="duplicate")
 
     if current_attempt != opened.attempt:
-        await _mark_done(conn, opened.attempt_id, SUPERSEDED)
+        await _mark_done(conn, opened.attempt_id, SUPERSEDED, error)
         return FinishedAttempt(outcome=SUPERSEDED)
 
     if status == "NEEDS_REVIEW" and manual_attempts >= max_manual_attempts:
@@ -244,13 +248,78 @@ async def finish_attempt(
         "WHERE id = %s",
         (status, status_reason, opened.case_id),
     )
-    await _mark_done(conn, opened.attempt_id, status)
+    await _mark_done(conn, opened.attempt_id, status, error)
     return FinishedAttempt(outcome=status, status_reason=status_reason, proposal_id=proposal_id)
 
 
-async def _mark_done(conn: AsyncConnection, attempt_id: int, outcome: str) -> None:
+async def _mark_done(
+    conn: AsyncConnection, attempt_id: int, outcome: str, error: str | None = None
+) -> None:
     await conn.execute(
-        "UPDATE triage.analysis_attempts SET state = 'DONE', outcome = %s, finished_at = now() "
-        "WHERE id = %s",
-        (outcome, attempt_id),
+        "UPDATE triage.analysis_attempts SET state = 'DONE', outcome = %s, error = %s, "
+        "finished_at = now() WHERE id = %s",
+        (outcome, error, attempt_id),
     )
+
+
+@dataclass(frozen=True)
+class StoredRouteDecision:
+    """Decisão do roteador gravada em `triage.route_decisions` para uma tentativa."""
+
+    decision: RouteDecision
+    llm_calls: int
+
+
+async def find_route_decision(
+    conn: AsyncConnection, attempt_id: int
+) -> StoredRouteDecision | None:
+    """Decisão já gravada da tentativa, reutilizada na retomada sem nova chamada (RNF04)."""
+    cur = await conn.execute(
+        "SELECT category, reason, evidence, llm_calls FROM triage.route_decisions "
+        "WHERE attempt_id = %s",
+        (attempt_id,),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    category, reason, evidence, llm_calls = row
+    decision = RouteDecision(category=category, reason=reason, evidence=evidence)
+    return StoredRouteDecision(decision=decision, llm_calls=llm_calls)
+
+
+async def save_route_decision(
+    conn: AsyncConnection,
+    opened: OpenedAttempt,
+    decision: RouteDecision,
+    *,
+    llm_calls: int,
+    prompt_version: str,
+    model: str,
+) -> StoredRouteDecision:
+    """Commit 2 da D15: grava a decisão e `issue_cases.category` na mesma transação (D20).
+
+    Se a tentativa já tiver decisão (entrega concorrente), vale a gravada, que é devolvida.
+    """
+    cur = await conn.execute(
+        "INSERT INTO triage.route_decisions "
+        "(attempt_id, category, reason, evidence, llm_calls, prompt_version, model) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (attempt_id) DO NOTHING RETURNING 1",
+        (
+            opened.attempt_id,
+            decision.category,
+            decision.reason,
+            decision.evidence,
+            llm_calls,
+            prompt_version,
+            model,
+        ),
+    )
+    if await cur.fetchone() is None:
+        stored = await find_route_decision(conn, opened.attempt_id)
+        assert stored is not None  # a linha que conflitou existe
+        return stored
+    await conn.execute(
+        "UPDATE triage.issue_cases SET category = %s, updated_at = now() WHERE id = %s",
+        (decision.category, opened.case_id),
+    )
+    return StoredRouteDecision(decision=decision, llm_calls=llm_calls)

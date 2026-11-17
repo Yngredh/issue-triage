@@ -1,7 +1,9 @@
 """Consumo da fila `analysis` e ciclo da tentativa, sem IA (Etapa 4).
 
-RabbitMQ e PostgreSQL reais (testcontainers). O roteador ainda não existe: o fluxo que chegaria
-a ele é conferido chamando o processador direto, porque a mensagem volta para a fila.
+RabbitMQ e PostgreSQL reais (testcontainers). O roteador é o `FakeRouterLLM` (D10); sem
+respostas programadas, qualquer chamada a ele falha o teste. Os especialistas ainda não existem:
+o fluxo que chegaria a eles é conferido chamando o processador direto, porque a mensagem volta
+para a fila.
 """
 
 import asyncio
@@ -23,6 +25,7 @@ from issue_triage.domain.issue import OriginEvent
 from issue_triage.domain.messages import Outcome
 from issue_triage.domain.templates import render_missing_info
 from tests.conftest import IssueEvent, TestData
+from tests.fakes import FakeRouterLLM, decision
 
 UNKNOWN_REPO = "Yaane-h/mechanical-hub-auth"
 ORDERS = "Yaane-h/mechanical-hub-orders"
@@ -118,9 +121,12 @@ async def consume(
     channel: aio_pika.abc.AbstractChannel,
     *messages: dict | bytes,
     max_manual_attempts: int = 2,
+    router: FakeRouterLLM | None = None,
 ) -> list[Outcome | BaseException]:
     """Publica as mensagens na fila e espera o consumidor processar todas, em ordem."""
-    processor = AnalysisProcessor(pool, max_manual_attempts=max_manual_attempts)
+    processor = AnalysisProcessor(
+        pool, router=router or FakeRouterLLM(), max_manual_attempts=max_manual_attempts
+    )
     async with running_consumer(processor.process, rabbitmq_url) as results:
         await publish(channel, *messages)
         return [await asyncio.wait_for(results.get(), timeout=20) for _ in messages]
@@ -273,15 +279,19 @@ async def test_author_edit_with_description_goes_on_to_the_router(
     await consume(pool, rabbitmq_url, broker, initial(origin))
     # A edição chega depois da primeira análise (D14: o texto atual é o da última edição).
     edit = committed_data.edit_event(origin, description="A ordem 12 não muda de status.")
-    processor = AnalysisProcessor(pool, max_manual_attempts=2)
+    router = FakeRouterLLM([decision("bug", "não muda de status")])
+    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
     body = json.dumps(author_edit(origin, edit)).encode()
 
     with structlog.testing.capture_logs() as logs:
         first = await processor.process(body)
         again = await processor.process(body)  # a mensagem voltou para a fila
 
-    # Sem roteador nesta etapa, a tentativa fica IN_PROGRESS e a mensagem volta para a fila.
+    # Sem especialistas até a Etapa 8, a tentativa fica IN_PROGRESS e a mensagem volta (D20);
+    # a reentrega reutiliza a decisão gravada, sem nova chamada ao roteador.
     assert (first, again) == (Outcome.REQUEUE, Outcome.REQUEUE)
+    assert len(router.calls) == 1
+    assert "A ordem 12 não muda de status." in router.calls[0].user
     assert attempts(db, origin.event_id) == [
         (1, "initial", None, "DONE", "READY_TO_PUBLISH"),
         (2, "author_edit", edit.event_id, "IN_PROGRESS", None),

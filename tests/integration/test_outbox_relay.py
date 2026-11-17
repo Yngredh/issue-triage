@@ -21,6 +21,7 @@ from issue_triage.adapters.outbox_relay import PUBLISH_QUEUE, OutboxRelay
 from issue_triage.analysis import AnalysisProcessor
 from issue_triage.domain.messages import Outcome
 from tests.conftest import TestData
+from tests.fakes import FakeRouterLLM
 
 ORDERS = "Yaane-h/mechanical-hub-orders"
 TIMEOUT_S = 30.0
@@ -124,7 +125,7 @@ async def test_h05_missing_info_reaches_publish_queue(
     # Caso H05: issue sem descrição gera a proposta `missing_info` e a linha na outbox.
     origin = committed_data.origin_event(repository=ORDERS, description="")
     body = {"eventId": origin.event_id, "attempt": 1, "trigger": "initial", "triggerRef": None}
-    processor = AnalysisProcessor(pool, max_manual_attempts=2)
+    processor = AnalysisProcessor(pool, router=FakeRouterLLM(), max_manual_attempts=2)
     assert await processor.process(json.dumps(body).encode()) is Outcome.ACK
 
     with psycopg.connect(database_url) as conn:
