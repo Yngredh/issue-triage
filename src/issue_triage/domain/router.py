@@ -137,6 +137,12 @@ def retry_message(user: str, rejection: Rejection) -> str:
 
 
 def _normalize(text: str) -> str:
+    """Desfaz `&lt;` e `&gt;` (D21), colapsa espaços e ignora maiúsculas.
+
+    O prompt mostra `&lt;` e `&gt;` no lugar dos sinais neutralizados; a evidência copiada de lá
+    precisa bater com o título e a descrição originais.
+    """
+    text = text.replace("&lt;", "<").replace("&gt;", ">")
     return " ".join(text.split()).casefold()
 
 

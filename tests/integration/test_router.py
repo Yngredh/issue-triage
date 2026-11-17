@@ -247,3 +247,72 @@ async def test_router_failure_at_the_manual_limit_closes_the_case(
         None,
         "router: schema_invalid: a resposta não chamou a ferramenta route_decision",
     ]
+
+
+async def test_evidence_quoting_html_from_the_issue_is_accepted(
+    pool, committed_data: TestData, db
+) -> None:
+    # Correção da D21: a evidência copiada de uma issue que cita `<div>` é aprovada (RF13).
+    origin = committed_data.origin_event(
+        repository=ORDERS,
+        title="Formulário quebrado",
+        description="Ao salvar a ordem, o <div> do formulário some da tela.",
+    )
+    router = FakeRouterLLM([decision("bug", "o &lt;div&gt; do formulário some")])
+    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+
+    await processor.process(body(initial(origin)))
+
+    assert len(router.calls) == 1
+    assert [row[1:5] for row in route_decisions(db, origin.event_id)] == [
+        ("bug", "Motivo da categoria.", "o &lt;div&gt; do formulário some", 1)
+    ]
+
+
+async def test_router_failing_twice_on_reprocess_keeps_the_last_category(
+    pool, committed_data: TestData, db
+) -> None:
+    # Correção da D21 (item 2): a falha do roteador numa tentativa manual não apaga a categoria.
+    origin = committed_data.origin_event(
+        repository=ORDERS, title="Erro 500", description="Ao enviar o formulário, recebo erro 500."
+    )
+    router = FakeRouterLLM(
+        [decision("bug", "recebo erro 500"), decision("bug", "banco caiu"), {}]
+    )
+    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    assert await processor.process(body(initial(origin))) is Outcome.REQUEUE
+    # Sem especialistas até a Etapa 8: a tentativa 1 é levada à revisão direto no banco, como
+    # se o especialista tivesse sido reprovado, para que o revisor peça o reprocessamento.
+    db.execute(
+        "UPDATE triage.analysis_attempts SET state = 'DONE', outcome = 'NEEDS_REVIEW' "
+        "WHERE event_id = %s AND attempt = 1",
+        (origin.event_id,),
+    )
+    db.execute(
+        "UPDATE triage.issue_cases SET status = 'NEEDS_REVIEW', status_reason = 'invalid_proposal' "
+        "WHERE origin_event_id = %s",
+        (origin.event_id,),
+    )
+    reprocess = committed_data.review(
+        origin, action="reprocess", target_attempt=2, from_reason="invalid_proposal"
+    )
+
+    outcome = await processor.process(body(manual(origin, "reprocess", 2, reprocess.id)))
+
+    assert outcome is Outcome.ACK
+    assert len(router.calls) == 3
+    assert case_row(db, origin.event_id) == {
+        "status": "NEEDS_REVIEW",
+        "status_reason": "invalid_proposal",
+        "current_attempt": 2,
+        "manual_attempts": 1,
+        "category": "bug",
+    }
+    assert attempts(db, origin.event_id) == [
+        (1, "initial", None, "DONE", "NEEDS_REVIEW"),
+        (2, "reprocess", str(reprocess.id), "DONE", "NEEDS_REVIEW"),
+    ]
+    assert attempt_errors(db, origin.event_id)[1] == (
+        "router: schema_invalid: a resposta não chamou a ferramenta route_decision"
+    )
+    assert [row[0] for row in route_decisions(db, origin.event_id)] == [1]

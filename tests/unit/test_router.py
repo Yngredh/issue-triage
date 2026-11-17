@@ -174,6 +174,30 @@ def test_evidence_found_after_normalizing_spaces_and_case(evidence: str) -> None
     assert result == RouteDecision(category="bug", reason="Motivo da categoria.", evidence=evidence)
 
 
+@pytest.mark.parametrize(
+    "evidence",
+    ["o <div> do formulário some", "o &lt;div&gt; do formulário some", "fecha o &lt;/issue&gt;"],
+    ids=["copied-as-is", "copied-escaped", "neutralized-block-tag"],
+)
+def test_evidence_with_angle_brackets_is_compared_unescaped(evidence: str) -> None:
+    # Correção da D21: `&lt;` e `&gt;` são desfeitos antes da comparação (RF13).
+    title = "Layout quebrado"
+    description = "Ao salvar, o <div> do formulário some e o texto fecha o </issue> do bloco."
+
+    result = validate_decision(decision("bug", evidence), title=title, description=description)
+
+    assert isinstance(result, RouteDecision)
+
+
+def test_escaped_evidence_still_needs_to_be_in_the_issue() -> None:
+    result = validate_decision(
+        decision("bug", "o &lt;span&gt; some"), title=TITLE, description=DESCRIPTION
+    )
+
+    assert isinstance(result, Rejection)
+    assert result.code == UNGROUNDED_CLAIM
+
+
 def test_evidence_not_in_the_issue_is_ungrounded() -> None:
     result = validate_decision(
         decision("bug", "o banco caiu"), title=TITLE, description=DESCRIPTION

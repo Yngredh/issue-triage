@@ -622,14 +622,14 @@ Requisitos: RF12, RF13, RF18, RNF04, RNF09. Depende de: Etapa 4. Pré-condição
 
 ### Etapa 7 — Ferramentas e harness do especialista
 Requisitos: RF14, RF15, RNF10, RNF11. Depende de: Etapa 3. Pré-condição: decisões D10, D11, D17, D21 e D22 validadas.
-- [ ] Commitar os quatro `catalog/source/*/*-architecture-spec.md` (D22) e criar `.gitattributes` com `catalog/source/** text eol=lf`; em seguida, `git add --renormalize catalog/source` e conferir que o diff não muda o conteúdo dos `.md` já commitados.
-- [ ] Correção da D21 na Etapa 6 (evidência): desfazer `&lt;` e `&gt;` antes de comparar a evidência do roteador com o título e a descrição originais; teste com issue que cita `<div>` e evidência copiada dela, aprovada (RF13).
-- [ ] Correção da D21 na Etapa 6 (categoria): teste de integração em que um `reprocess` de caso com categoria `bug` tem o roteador reprovado duas vezes; o caso vai para `NEEDS_REVIEW (invalid_proposal)` e `category` continua `bug`.
-- [ ] `list_docs`, `search_docs` (D11) e `read_doc` presas à pasta do repositório do caso, conforme "Contrato das ferramentas e da saída" (D22): respostas em JSON, erros com `is_error` e códigos fixos, só `.md` sem subpastas, trecho centrado na linha, leitura em modo texto.
-- [ ] Contadores de chamadas e de caracteres lidos (D22): a chamada que estoura é recusada com `limit_exceeded`, entra em `tool_calls` e o harness encerra a sessão na hora, com `limit_exceeded:tool_calls` ou `limit_exceeded:read_chars`.
-- [ ] Registro de cada chamada (nome, argumentos, duração, tamanho, corte) para `tool_calls`.
-- [ ] Porta `SpecialistRunner`, fake e adaptador real com o `claude-agent-sdk`: servidor MCP em processo com só as ferramentas da lista do especialista, ferramentas embutidas desligadas, `max_turns`, `max_budget_usd`, `output_format` gerado de `SpecialistOutput` (D22), e tempo `SPECIALIST_TIMEOUT_S`. Mapear o motivo de parada do SDK para `limit_exceeded:turns` e `limit_exceeded:budget`.
-- [ ] Testes unitários das ferramentas em uma pasta temporária: travessia de caminho recusada, corte em 4.000 caracteres, limite de 50 arquivos, busca com acento e maiúscula, contadores. Teste do adaptador real só da montagem das opções (sem chamar a API).
+- [x] Commitar os quatro `catalog/source/*/*-architecture-spec.md` (D22) e criar `.gitattributes` com `catalog/source/** text eol=lf`; em seguida, `git add --renormalize catalog/source` e conferir que o diff não muda o conteúdo dos `.md` já commitados.
+- [x] Correção da D21 na Etapa 6 (evidência): desfazer `&lt;` e `&gt;` antes de comparar a evidência do roteador com o título e a descrição originais; teste com issue que cita `<div>` e evidência copiada dela, aprovada (RF13).
+- [x] Correção da D21 na Etapa 6 (categoria): teste de integração em que um `reprocess` de caso com categoria `bug` tem o roteador reprovado duas vezes; o caso vai para `NEEDS_REVIEW (invalid_proposal)` e `category` continua `bug`.
+- [x] `list_docs`, `search_docs` (D11) e `read_doc` presas à pasta do repositório do caso, conforme "Contrato das ferramentas e da saída" (D22): respostas em JSON, erros com `is_error` e códigos fixos, só `.md` sem subpastas, trecho centrado na linha, leitura em modo texto.
+- [x] Contadores de chamadas e de caracteres lidos (D22): a chamada que estoura é recusada com `limit_exceeded`, entra em `tool_calls` e o harness encerra a sessão na hora, com `limit_exceeded:tool_calls` ou `limit_exceeded:read_chars`.
+- [x] Registro de cada chamada (nome, argumentos, duração, tamanho, corte) para `tool_calls`.
+- [x] Porta `SpecialistRunner`, fake e adaptador real com o `claude-agent-sdk`: servidor MCP em processo com só as ferramentas da lista do especialista, ferramentas embutidas desligadas, `max_turns`, `max_budget_usd`, `output_format` gerado de `SpecialistOutput` (D22), e tempo `SPECIALIST_TIMEOUT_S`. Mapear o motivo de parada do SDK para `limit_exceeded:turns` e `limit_exceeded:budget`.
+- [x] Testes unitários das ferramentas em uma pasta temporária: travessia de caminho recusada, corte em 4.000 caracteres, limite de 50 arquivos, busca com acento e maiúscula, contadores. Teste do adaptador real só da montagem das opções (sem chamar a API).
 
 ### Etapa 8 — Especialistas, contexto acumulado e validador
 Requisitos: RF13, RF14, RF16, RF17, RF18, RF31, RNF09. Depende de: Etapas 6 e 7. Pré-condição: decisões D12, D14 e D15 validadas.
