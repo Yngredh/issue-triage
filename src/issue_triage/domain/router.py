@@ -91,7 +91,7 @@ def neutralize(text: str) -> str:
     return _BLOCK_TAG.sub(r"&lt;\1&gt;", text)
 
 
-def _guidelines_lines(guidelines: Sequence[TriageGuideline]) -> str:
+def guidelines_lines(guidelines: Sequence[TriageGuideline]) -> str:
     if not guidelines:
         return "- nenhuma"
     return "\n".join(
@@ -122,7 +122,7 @@ def build_user_message(
     """
     return ROUTER_USER_TEMPLATE.substitute(
         repository=repository,
-        orientacoes=_guidelines_lines(guidelines),
+        orientacoes=guidelines_lines(guidelines),
         title=neutralize(title),
         description=neutralize(description),
         bloco_enriquecimento=_enrichment_block(enrichments),
@@ -136,7 +136,7 @@ def retry_message(user: str, rejection: Rejection) -> str:
     return f"{original}\n\n{line}"
 
 
-def _normalize(text: str) -> str:
+def normalize_match(text: str) -> str:
     """Desfaz `&lt;` e `&gt;` (D21), colapsa espaços e ignora maiúsculas.
 
     O prompt mostra `&lt;` e `&gt;` no lugar dos sinais neutralizados; a evidência copiada de lá
@@ -178,12 +178,12 @@ def validate_decision(
     except ValidationError as exc:
         return Rejection(SCHEMA_INVALID, _schema_detail(raw, exc))
 
-    evidence = _normalize(decision.evidence)
+    evidence = normalize_match(decision.evidence)
     if not evidence:
         if decision.category == "indeterminado":
             return decision
         return Rejection(UNGROUNDED_CLAIM, "evidence vazia fora de indeterminado")
-    if evidence not in _normalize(title) and evidence not in _normalize(description):
+    if evidence not in normalize_match(title) and evidence not in normalize_match(description):
         return Rejection(UNGROUNDED_CLAIM, "evidence não aparece no título nem na descrição")
     return decision
 

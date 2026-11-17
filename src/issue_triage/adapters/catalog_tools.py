@@ -124,7 +124,11 @@ def snippet(text: str, start: int, end: int) -> str:
 
 @dataclass(frozen=True)
 class ToolCall:
-    """Registro de uma chamada, gravado em `proposals.tool_calls` (RNF11)."""
+    """Registro de uma chamada, gravado em `proposals.tool_calls` (RNF11).
+
+    `paths` são os arquivos que a chamada devolveu (o arquivo de um `read_doc` sem erro, os
+    arquivos dos trechos de um `search_docs`), usados pela checagem 4 do validador (D25).
+    """
 
     name: str
     arguments: dict[str, Any]
@@ -132,6 +136,7 @@ class ToolCall:
     result_chars: int
     truncated: bool
     error: str | None
+    paths: list[str]
 
 
 @dataclass(frozen=True)
@@ -139,6 +144,7 @@ class _Output:
     payload: dict[str, Any]
     read_chars: int
     truncated: bool
+    paths: tuple[str, ...] = ()
 
 
 class CatalogTools:
@@ -198,6 +204,7 @@ class CatalogTools:
             result_chars=len(text),
             truncated=output.truncated if output is not None else False,
             error=error.code if error is not None else None,
+            paths=list(output.paths) if output is not None else [],
         )
         self._calls.append(record)
         logger.info(
@@ -257,7 +264,8 @@ class CatalogTools:
             if truncated:
                 break
         read = sum(len(match["snippet"]) for match in matches)
-        return _Output({"matches": matches, "truncated": truncated}, read, truncated)
+        paths = tuple(dict.fromkeys(match["path"] for match in matches))
+        return _Output({"matches": matches, "truncated": truncated}, read, truncated, paths)
 
     def _read_doc(self, path: str, offset: int) -> _Output:
         text = read_doc_text(self.folder, path)
@@ -271,4 +279,4 @@ class CatalogTools:
             "truncated": truncated,
             "next_offset": end if truncated else None,
         }
-        return _Output(payload, len(content), truncated)
+        return _Output(payload, len(content), truncated, (path,))

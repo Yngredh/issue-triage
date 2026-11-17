@@ -13,10 +13,15 @@ from psycopg_pool import AsyncConnectionPool
 
 from issue_triage.adapters import triage_store
 from issue_triage.adapters.database import close_pool, create_pool, open_pool
-from issue_triage.analysis import AnalysisProcessor
 from issue_triage.domain.messages import Outcome
 from tests.conftest import TestData
-from tests.fakes import FakeRouterLLM, decision
+from tests.fakes import (
+    FakeRouterLLM,
+    FakeSpecialistRunner,
+    SpecialistTurn,
+    decision,
+    make_processor,
+)
 from tests.integration.test_analysis import attempts, case_row, initial, manual, outbox, proposals
 
 ORDERS = "Yaane-h/mechanical-hub-orders"
@@ -36,6 +41,11 @@ async def pool(database_url: str) -> AsyncIterator[AsyncConnectionPool]:
 def db(database_url: str) -> Iterator[psycopg.Connection]:
     with psycopg.connect(database_url, autocommit=True) as conn:
         yield conn
+
+
+def _limit_turn() -> SpecialistTurn:
+    """Especialista que estoura o limite de turnos: proposta INVALID, sem segunda chance."""
+    return SpecialistTurn(stop_reason="limit_exceeded:turns")
 
 
 def body(message: dict) -> bytes:
@@ -77,7 +87,7 @@ async def test_indeterminado_ends_in_review_without_proposal(
     # Casos H01 a H03: o roteador não consegue decidir a categoria.
     origin = committed_data.origin_event(repository=ORDERS, title=title, description=description)
     router = FakeRouterLLM([decision("indeterminado", "", reason="Texto sem pedido claro.")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    processor = make_processor(pool, router=router)
 
     with structlog.testing.capture_logs() as logs:
         outcome = await processor.process(body(initial(origin)))
@@ -109,14 +119,12 @@ async def test_category_is_saved_with_the_decision_and_redelivery_reuses_it(
         repository=ORDERS, title="Exportar relatório", description="Adicionar exportação em CSV."
     )
     router = FakeRouterLLM([decision("melhoria", "exportação em CSV")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    # A primeira entrega cai no especialista (erro do provedor sobe e a mensagem volta).
+    specialist = FakeSpecialistRunner([RuntimeError("provider down"), _limit_turn()])
+    processor = make_processor(pool, router=router, specialist=specialist)
 
-    first = await processor.process(body(initial(origin)))
-    again = await processor.process(body(initial(origin)))  # a mensagem voltou para a fila
-
-    # Sem especialistas até a Etapa 8 (D20): a tentativa fica IN_PROGRESS e a mensagem volta.
-    assert (first, again) == (Outcome.REQUEUE, Outcome.REQUEUE)
-    assert len(router.calls) == 1
+    with pytest.raises(RuntimeError):
+        await processor.process(body(initial(origin)))
     case = case_row(db, origin.event_id)
     assert (case["status"], case["status_reason"], case["category"]) == (
         "ANALYZING",
@@ -124,10 +132,16 @@ async def test_category_is_saved_with_the_decision_and_redelivery_reuses_it(
         "melhoria",
     )
     assert attempts(db, origin.event_id) == [(1, "initial", None, "IN_PROGRESS", None)]
+
+    again = await processor.process(body(initial(origin)))  # a mensagem voltou para a fila
+
+    assert again is Outcome.ACK
+    assert len(router.calls) == 1
+    assert len(specialist.calls) == 2
     assert [row[1:5] for row in route_decisions(db, origin.event_id)] == [
         ("melhoria", "Motivo da categoria.", "exportação em CSV", 1)
     ]
-    assert proposals(db, origin.event_id) == []
+    assert case_row(db, origin.event_id)["category"] == "melhoria"
 
 
 async def test_resume_with_stored_indeterminado_decision_does_not_call_the_router(
@@ -136,7 +150,7 @@ async def test_resume_with_stored_indeterminado_decision_does_not_call_the_route
     origin = committed_data.origin_event(repository=ORDERS, description="Não está legal.")
     # O processo caiu depois do commit 2: decisão gravada e tentativa ainda IN_PROGRESS.
     crashed = FakeRouterLLM([decision("indeterminado", "")])
-    processor = AnalysisProcessor(pool, router=crashed, max_manual_attempts=2)
+    processor = make_processor(pool, router=crashed)
     with monkeypatch.context() as patch:
         patch.setattr(triage_store, "finish_attempt", _crash)
         with pytest.raises(SystemExit):
@@ -145,7 +159,7 @@ async def test_resume_with_stored_indeterminado_decision_does_not_call_the_route
     assert case_row(db, origin.event_id)["category"] == "indeterminado"
 
     untouched = FakeRouterLLM()  # sem respostas: qualquer chamada falha o teste
-    processor = AnalysisProcessor(pool, router=untouched, max_manual_attempts=2)
+    processor = make_processor(pool, router=untouched)
     with structlog.testing.capture_logs() as logs:
         outcome = await processor.process(body(initial(origin)))
 
@@ -170,7 +184,7 @@ async def test_router_failing_twice_needs_review_with_error(
         repository=ORDERS, title="Erro 500", description="Ao enviar o formulário, recebo erro 500."
     )
     router = FakeRouterLLM([decision("bug", "banco caiu"), decision("bug", "timeout no banco")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    processor = make_processor(pool, router=router)
 
     with structlog.testing.capture_logs() as logs:
         outcome = await processor.process(body(initial(origin)))
@@ -204,11 +218,13 @@ async def test_router_retry_succeeds_with_two_calls(pool, committed_data: TestDa
         repository=ORDERS, title="Como configuro?", description="Como configuro o token?"
     )
     router = FakeRouterLLM([{"category": "duvida"}, decision("duvida", "configuro o token")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    specialist = FakeSpecialistRunner([_limit_turn()])
+    processor = make_processor(pool, router=router, specialist=specialist)
 
     outcome = await processor.process(body(initial(origin)))
 
-    assert outcome is Outcome.REQUEUE
+    assert outcome is Outcome.ACK
+    assert specialist.calls[0].specialist == "dominio"
     assert [row[1:5] for row in route_decisions(db, origin.event_id)] == [
         ("duvida", "Motivo da categoria.", "configuro o token", 2)
     ]
@@ -228,7 +244,7 @@ async def test_router_failure_at_the_manual_limit_closes_the_case(
     router = FakeRouterLLM(
         [decision("indeterminado", ""), {}, {}]  # tentativa 1 e as duas chamadas da tentativa 2
     )
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=1)
+    processor = make_processor(pool, router=router, max_manual_attempts=1)
 
     first = await processor.process(body(initial(origin)))
     second = await processor.process(body(manual(origin, "enrich", 2, enrich.id)))
@@ -259,7 +275,8 @@ async def test_evidence_quoting_html_from_the_issue_is_accepted(
         description="Ao salvar a ordem, o <div> do formulário some da tela.",
     )
     router = FakeRouterLLM([decision("bug", "o &lt;div&gt; do formulário some")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    specialist = FakeSpecialistRunner([_limit_turn()])
+    processor = make_processor(pool, router=router, specialist=specialist)
 
     await processor.process(body(initial(origin)))
 
@@ -279,20 +296,11 @@ async def test_router_failing_twice_on_reprocess_keeps_the_last_category(
     router = FakeRouterLLM(
         [decision("bug", "recebo erro 500"), decision("bug", "banco caiu"), {}]
     )
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
-    assert await processor.process(body(initial(origin))) is Outcome.REQUEUE
-    # Sem especialistas até a Etapa 8: a tentativa 1 é levada à revisão direto no banco, como
-    # se o especialista tivesse sido reprovado, para que o revisor peça o reprocessamento.
-    db.execute(
-        "UPDATE triage.analysis_attempts SET state = 'DONE', outcome = 'NEEDS_REVIEW' "
-        "WHERE event_id = %s AND attempt = 1",
-        (origin.event_id,),
-    )
-    db.execute(
-        "UPDATE triage.issue_cases SET status = 'NEEDS_REVIEW', status_reason = 'invalid_proposal' "
-        "WHERE origin_event_id = %s",
-        (origin.event_id,),
-    )
+    # O especialista da tentativa 1 estoura um limite: o caso vai para a revisão e o revisor
+    # pede o reprocessamento.
+    specialist = FakeSpecialistRunner([_limit_turn()])
+    processor = make_processor(pool, router=router, specialist=specialist)
+    assert await processor.process(body(initial(origin))) is Outcome.ACK
     reprocess = committed_data.review(
         origin, action="reprocess", target_attempt=2, from_reason="invalid_proposal"
     )

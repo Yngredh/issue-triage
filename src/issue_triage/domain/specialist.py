@@ -75,7 +75,8 @@ class SpecialistResult:
     """Resultado de uma chamada a um especialista.
 
     `raw_output` é a saída estruturada bruta (vai para `proposals.raw_output` mesmo reprovada);
-    é nula quando a sessão terminou por limite. `tool_calls` é a lista gravada em
+    é nula quando a sessão terminou por limite ou quando o modelo terminou sem saída estruturada
+    (inclusive `error_max_structured_output_retries`, D23). `tool_calls` é a lista gravada em
     `proposals.tool_calls`. `stop_reason` é `completed` ou `limit_exceeded:<motivo>`.
     """
 

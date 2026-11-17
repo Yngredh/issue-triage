@@ -74,6 +74,10 @@ _SCHEMAS: dict[str, dict[str, Any]] = {
 # Motivos de parada do SDK que são estouro de limite (Issue Triage Spec, seção 2).
 _LIMIT_SUBTYPES = {"error_max_turns": LIMIT_TURNS, "error_max_budget_usd": LIMIT_BUDGET}
 
+# O modelo não conseguiu produzir a saída estruturada: falha do modelo, não do provedor (D23).
+# Vira `raw_output` nulo, que o validador reprova com `schema_invalid` e a segunda chance.
+STRUCTURED_OUTPUT_RETRIES = "error_max_structured_output_retries"
+
 
 def mcp_tool_name(name: str) -> str:
     """Nome com que a ferramenta aparece para o modelo (`mcp__catalog__<nome>`)."""
@@ -151,7 +155,8 @@ class ClaudeSpecialistRunner:
         """Roda o especialista; estouro de limite das ferramentas encerra a sessão na hora.
 
         Tempo acima de `SPECIALIST_TIMEOUT_S` levanta `TimeoutError`; resultado de erro do SDK
-        que não é limite (falha do provedor) levanta `ResultError`.
+        que não é limite (falha do provedor) levanta `ResultError`. O modelo que não produziu a
+        saída estruturada (`error_max_structured_output_retries`) devolve `raw_output` nulo (D23).
         """
         tools = self.new_tools(spec)
         client = self._client_factory(self.build_options(spec, tools))
@@ -179,6 +184,13 @@ class ClaudeSpecialistRunner:
                 tool_calls=tools.tool_calls(),
                 cost_usd=message.total_cost_usd,
                 stop_reason=_LIMIT_SUBTYPES[message.subtype],
+            )
+        if message.subtype == STRUCTURED_OUTPUT_RETRIES:
+            return SpecialistResult(
+                raw_output=None,
+                tool_calls=tools.tool_calls(),
+                cost_usd=message.total_cost_usd,
+                stop_reason=STOP_COMPLETED,
             )
         if message.is_error:
             raise ResultError(

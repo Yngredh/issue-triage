@@ -200,6 +200,19 @@ async def test_sdk_limits_map_to_limit_exceeded(
     assert result.raw_output is None
 
 
+async def test_structured_output_retries_returns_null_output(tmp_path: Path) -> None:
+    # D23: falha do modelo, não do provedor; o validador reprova com `schema_invalid`.
+    async def script(client: FakeClient) -> Any:
+        yield _result("error_max_structured_output_retries", total_cost_usd=0.02)
+
+    result = await _runner(_client_with(script)).run(_request(tmp_path))
+
+    assert result.raw_output is None
+    assert result.stop_reason == "completed"
+    assert result.limit_exceeded is False
+    assert result.cost_usd == 0.02
+
+
 async def test_provider_error_result_raises(tmp_path: Path) -> None:
     async def script(client: FakeClient) -> Any:
         yield _result("success", is_error=True, api_error_status=529, result="API Error")

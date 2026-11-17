@@ -4,12 +4,14 @@ Cada função roda dentro da transação aberta por quem chama; o processamento 
 (`issue_triage.analysis`) decide onde fica cada commit.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
 from issue_triage.domain.router import RouteDecision
+from issue_triage.domain.specialist_flow import PreviousProposal
 
 PUBLISH_TOPIC = "publish"
 SUPERSEDED = "superseded"
@@ -51,6 +53,30 @@ class MissingInfoProposal:
     """Proposta `missing_info` (RF11, RF20): comentário pronto, sem IA."""
 
     comment_body: str
+
+
+@dataclass(frozen=True)
+class TriageProposal:
+    """Proposta `triage` do especialista (D24, D25), `VALID` ou `INVALID`.
+
+    `comment_body` só existe na `VALID`; só ela gera a linha na `publish_outbox` (RF21).
+    """
+
+    specialist: str
+    validation_status: str
+    validation_error: str | None
+    prompt_version: str
+    model: str
+    raw_output: list[dict[str, Any]]
+    tool_calls: list[dict[str, Any]]
+    category: str | None = None
+    summary: str | None = None
+    next_step: str | None = None
+    conclusion: str | None = None
+    conclusion_reason: str | None = None
+    answer: str | None = None
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    comment_body: str | None = None
 
 
 def _existing_attempt(
@@ -194,6 +220,7 @@ async def finish_attempt(
     status_reason: str,
     max_manual_attempts: int,
     missing_info: MissingInfoProposal | None = None,
+    triage: TriageProposal | None = None,
     error: str | None = None,
 ) -> FinishedAttempt:
     """Commit 3 da D15: proposta, status do caso, tentativa `DONE` e outbox, juntos (RF21).
@@ -202,7 +229,8 @@ async def finish_attempt(
     `DONE` com `outcome = superseded`, sem proposta. Regra de fechamento (RF30): resultado
     `NEEDS_REVIEW` com `manual_attempts >= max_manual_attempts` vira
     `MAX_RETRIES_REACHED (manual_attempts_exhausted)`. `error` é o motivo da falha da
-    tentativa, técnica ou do modelo, gravado em `analysis_attempts.error` (D20).
+    tentativa, técnica ou do modelo, gravado em `analysis_attempts.error` (D20, D24). A
+    proposta `triage` é gravada `VALID` ou `INVALID`; só a `VALID` vai para a outbox.
     """
     cur = await conn.execute(
         "SELECT current_attempt, manual_attempts FROM triage.issue_cases WHERE id = %s FOR UPDATE",
@@ -232,16 +260,11 @@ async def finish_attempt(
             (opened.attempt_id, missing_info.comment_body),
         )
         proposal_id = (await cur.fetchone())[0]
-        await conn.execute(
-            "INSERT INTO triage.publish_outbox (event_id, topic, dedup_key, payload) "
-            "VALUES (%s, %s, %s, %s)",
-            (
-                event_id,
-                PUBLISH_TOPIC,
-                f"{repository}#{issue_number}:{opened.attempt}",
-                Jsonb({"proposalId": proposal_id, "revision": opened.attempt}),
-            ),
-        )
+        await _enqueue_publish(conn, opened, event_id, repository, issue_number, proposal_id)
+    elif triage is not None:
+        proposal_id = await _insert_triage_proposal(conn, opened.attempt_id, triage)
+        if triage.validation_status == "VALID":
+            await _enqueue_publish(conn, opened, event_id, repository, issue_number, proposal_id)
 
     await conn.execute(
         "UPDATE triage.issue_cases SET status = %s, status_reason = %s, updated_at = now() "
@@ -250,6 +273,73 @@ async def finish_attempt(
     )
     await _mark_done(conn, opened.attempt_id, status, error)
     return FinishedAttempt(outcome=status, status_reason=status_reason, proposal_id=proposal_id)
+
+
+async def _insert_triage_proposal(
+    conn: AsyncConnection, attempt_id: int, proposal: TriageProposal
+) -> int:
+    cur = await conn.execute(
+        "INSERT INTO triage.proposals "
+        "(attempt_id, kind, specialist, category, summary, next_step, conclusion, "
+        " conclusion_reason, answer, evidence, tool_calls, raw_output, validation_status, "
+        " validation_error, comment_body, prompt_version, model) "
+        "VALUES (%s, 'triage', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "RETURNING id",
+        (
+            attempt_id,
+            proposal.specialist,
+            proposal.category,
+            proposal.summary,
+            proposal.next_step,
+            proposal.conclusion,
+            proposal.conclusion_reason,
+            proposal.answer,
+            Jsonb(proposal.evidence),
+            Jsonb(proposal.tool_calls),
+            Jsonb(proposal.raw_output),
+            proposal.validation_status,
+            proposal.validation_error,
+            proposal.comment_body,
+            proposal.prompt_version,
+            proposal.model,
+        ),
+    )
+    return (await cur.fetchone())[0]
+
+
+async def _enqueue_publish(
+    conn: AsyncConnection,
+    opened: OpenedAttempt,
+    event_id: str,
+    repository: str,
+    issue_number: int,
+    proposal_id: int,
+) -> None:
+    """Linha da `publish_outbox` na mesma transação da proposta (RF21)."""
+    await conn.execute(
+        "INSERT INTO triage.publish_outbox (event_id, topic, dedup_key, payload) "
+        "VALUES (%s, %s, %s, %s)",
+        (
+            event_id,
+            PUBLISH_TOPIC,
+            f"{repository}#{issue_number}:{opened.attempt}",
+            Jsonb({"proposalId": proposal_id, "revision": opened.attempt}),
+        ),
+    )
+
+
+async def list_previous_proposals(
+    conn: AsyncConnection, opened: OpenedAttempt
+) -> list[PreviousProposal]:
+    """Propostas das tentativas anteriores do caso, em ordem de `attempt` (RF31, D14)."""
+    cur = await conn.execute(
+        "SELECT a.attempt, p.kind, p.specialist, p.validation_status, p.validation_error, "
+        "p.raw_output "
+        "FROM triage.proposals p JOIN triage.analysis_attempts a ON a.id = p.attempt_id "
+        "WHERE a.case_id = %s AND a.attempt < %s ORDER BY a.attempt",
+        (opened.case_id, opened.attempt),
+    )
+    return [PreviousProposal(*row) for row in await cur.fetchall()]
 
 
 async def _mark_done(

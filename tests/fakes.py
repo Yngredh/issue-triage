@@ -6,9 +6,11 @@ Nenhum teste chama a Anthropic de verdade.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from issue_triage.adapters.catalog_tools import CatalogTools
+from issue_triage.analysis import AnalysisProcessor
 from issue_triage.domain.specialist import (
     STOP_COMPLETED,
     SpecialistRequest,
@@ -105,3 +107,53 @@ class FakeSpecialistRunner:
             cost_usd=response.cost_usd,
             stop_reason=response.stop_reason,
         )
+
+
+# Pasta real da Base de conhecimento (só leitura de arquivos).
+CATALOG_SOURCE_DIR = Path(__file__).resolve().parents[1] / "catalog" / "source"
+
+SPECIALIST_MODELS = {
+    "bug": "fake-bug-model",
+    "melhoria": "fake-melhoria-model",
+    "dominio": "fake-dominio-model",
+}
+
+
+def make_processor(
+    pool: Any,
+    *,
+    router: FakeRouterLLM | None = None,
+    specialist: FakeSpecialistRunner | None = None,
+    max_manual_attempts: int = 2,
+) -> AnalysisProcessor:
+    """`AnalysisProcessor` com as portas falsas; sem respostas, qualquer chamada falha o teste."""
+    return AnalysisProcessor(
+        pool,
+        router=router or FakeRouterLLM(),
+        specialist=specialist or FakeSpecialistRunner(),
+        specialist_models=SPECIALIST_MODELS,
+        catalog_source_dir=CATALOG_SOURCE_DIR,
+        max_manual_attempts=max_manual_attempts,
+    )
+
+
+def specialist_output(
+    category: str = "bug",
+    *,
+    summary: str = "Resumo do relato.",
+    next_step: str = "Conferir a mudança de status.",
+    conclusion: str = "procede",
+    conclusion_reason: str = "A documentação sustenta o relato.",
+    answer: str | None = None,
+    evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Saída estruturada do especialista (`SpecialistOutput`)."""
+    return {
+        "category": category,
+        "summary": summary,
+        "next_step": next_step,
+        "conclusion": conclusion,
+        "conclusion_reason": conclusion_reason,
+        "answer": answer,
+        "evidence": evidence if evidence is not None else [],
+    }

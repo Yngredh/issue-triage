@@ -1,9 +1,7 @@
 """Consumo da fila `analysis` e ciclo da tentativa, sem IA (Etapa 4).
 
-RabbitMQ e PostgreSQL reais (testcontainers). O roteador é o `FakeRouterLLM` (D10); sem
-respostas programadas, qualquer chamada a ele falha o teste. Os especialistas ainda não existem:
-o fluxo que chegaria a eles é conferido chamando o processador direto, porque a mensagem volta
-para a fila.
+RabbitMQ e PostgreSQL reais (testcontainers). O roteador e os especialistas são as portas falsas
+(D10); sem respostas programadas, qualquer chamada a eles falha o teste.
 """
 
 import asyncio
@@ -20,12 +18,18 @@ from psycopg_pool import AsyncConnectionPool
 from issue_triage.adapters.analysis_consumer import AnalysisConsumer, declare_analysis_queue
 from issue_triage.adapters.database import close_pool, create_pool, open_pool
 from issue_triage.adapters.inbound import read_issue_text
-from issue_triage.analysis import AnalysisProcessor
 from issue_triage.domain.issue import OriginEvent
 from issue_triage.domain.messages import Outcome
 from issue_triage.domain.templates import render_missing_info
 from tests.conftest import IssueEvent, TestData
-from tests.fakes import FakeRouterLLM, decision
+from tests.fakes import (
+    FakeRouterLLM,
+    FakeSpecialistRunner,
+    SpecialistTurn,
+    decision,
+    make_processor,
+    specialist_output,
+)
 
 UNKNOWN_REPO = "Yaane-h/mechanical-hub-auth"
 ORDERS = "Yaane-h/mechanical-hub-orders"
@@ -124,9 +128,7 @@ async def consume(
     router: FakeRouterLLM | None = None,
 ) -> list[Outcome | BaseException]:
     """Publica as mensagens na fila e espera o consumidor processar todas, em ordem."""
-    processor = AnalysisProcessor(
-        pool, router=router or FakeRouterLLM(), max_manual_attempts=max_manual_attempts
-    )
+    processor = make_processor(pool, router=router, max_manual_attempts=max_manual_attempts)
     async with running_consumer(processor.process, rabbitmq_url) as results:
         await publish(channel, *messages)
         return [await asyncio.wait_for(results.get(), timeout=20) for _ in messages]
@@ -280,29 +282,51 @@ async def test_author_edit_with_description_goes_on_to_the_router(
     # A edição chega depois da primeira análise (D14: o texto atual é o da última edição).
     edit = committed_data.edit_event(origin, description="A ordem 12 não muda de status.")
     router = FakeRouterLLM([decision("bug", "não muda de status")])
-    processor = AnalysisProcessor(pool, router=router, max_manual_attempts=2)
+    specialist = FakeSpecialistRunner(
+        [
+            SpecialistTurn(
+                output=specialist_output(
+                    evidence=[
+                        {"source": "issue", "ref": "description", "quote": "não muda de status"},
+                        {
+                            "source": "catalog",
+                            "ref": "order_status.md",
+                            "quote": "Mecânico iniciou a execução dos reparos.",
+                        },
+                    ]
+                ),
+                tool_calls=(("read_doc", {"path": "order_status.md"}),),
+            )
+        ]
+    )
+    processor = make_processor(pool, router=router, specialist=specialist)
     body = json.dumps(author_edit(origin, edit)).encode()
 
     with structlog.testing.capture_logs() as logs:
         first = await processor.process(body)
-        again = await processor.process(body)  # a mensagem voltou para a fila
+        again = await processor.process(body)  # reentrega da mesma edição
 
-    # Sem especialistas até a Etapa 8, a tentativa fica IN_PROGRESS e a mensagem volta (D20);
-    # a reentrega reutiliza a decisão gravada, sem nova chamada ao roteador.
-    assert (first, again) == (Outcome.REQUEUE, Outcome.REQUEUE)
+    assert (first, again) == (Outcome.ACK, Outcome.ACK)
     assert len(router.calls) == 1
+    assert len(specialist.calls) == 1
     assert "A ordem 12 não muda de status." in router.calls[0].user
+    # Contexto acumulado (RF31, D25): a tentativa 1 foi o pedido de informações.
+    assert (
+        "<propostas_anteriores>\n"
+        "Tentativa 1 (pedido de informações: a issue estava sem descrição)\n"
+        "</propostas_anteriores>"
+    ) in specialist.calls[0].user_message
     assert attempts(db, origin.event_id) == [
         (1, "initial", None, "DONE", "READY_TO_PUBLISH"),
-        (2, "author_edit", edit.event_id, "IN_PROGRESS", None),
+        (2, "author_edit", edit.event_id, "DONE", "READY_TO_PUBLISH"),
     ]
     case = case_row(db, origin.event_id)
     assert (case["status"], case["status_reason"], case["current_attempt"]) == (
-        "ANALYZING",
-        "author_edit",
+        "READY_TO_PUBLISH",
+        "proposal_validated",
         2,
     )
-    assert "analysis.resumed" in [entry["event"] for entry in logs]
+    assert "analysis.skipped_duplicate" in [entry["event"] for entry in logs]
 
 
 async def test_author_edit_out_of_state_and_redelivered_edit_are_ignored(

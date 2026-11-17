@@ -8,6 +8,7 @@ import structlog
 
 from issue_triage.adapters.analysis_consumer import AnalysisConsumer
 from issue_triage.adapters.anthropic_router import AnthropicRouterLLM
+from issue_triage.adapters.claude_specialist import ClaudeSpecialistRunner
 from issue_triage.adapters.database import close_pool, create_pool, open_pool
 from issue_triage.adapters.outbox_relay import OutboxRelay
 from issue_triage.analysis import AnalysisProcessor
@@ -34,9 +35,10 @@ ServicesFactory = Callable[[Settings], AbstractAsyncContextManager[None]]
 
 @asynccontextmanager
 async def worker_services(settings: Settings) -> AsyncIterator[None]:
-    """Pool do banco, roteador, consumidor da fila `analysis` e relay da `publish_outbox` (D4).
+    """Pool do banco, roteador, especialistas, consumidor da `analysis` e relay da outbox (D4).
 
-    O roteador usa o SDK `anthropic` com `ANTHROPIC_API_KEY`, que `main.py` exige na subida.
+    O roteador usa o SDK `anthropic` e os especialistas o `claude-agent-sdk`, ambos com
+    `ANTHROPIC_API_KEY`, que `main.py` exige na subida.
 
     Ativos enquanto o bloco dura. Na saída o consumidor para de consumir e termina a mensagem em
     curso, o relay para (um lote em curso é desfeito e fica pendente) e só então o pool fecha.
@@ -49,10 +51,27 @@ async def worker_services(settings: Settings) -> AsyncIterator[None]:
         max_tokens=settings.ROUTER_MAX_TOKENS,
         timeout_s=settings.ROUTER_TIMEOUT_S,
     )
+    specialist = ClaudeSpecialistRunner(
+        settings.ANTHROPIC_API_KEY,
+        max_turns=settings.SPECIALIST_MAX_TURNS,
+        max_tool_calls=settings.SPECIALIST_MAX_TOOL_CALLS,
+        max_budget_usd=settings.SPECIALIST_MAX_BUDGET_USD,
+        max_read_chars=settings.SPECIALIST_MAX_READ_CHARS,
+        timeout_s=settings.SPECIALIST_TIMEOUT_S,
+    )
     pool = create_pool(settings.DATABASE_URL)
     await open_pool(pool)
     processor = AnalysisProcessor(
-        pool, router=router, max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS
+        pool,
+        router=router,
+        specialist=specialist,
+        specialist_models={
+            "bug": settings.BUG_SPECIALIST_MODEL,
+            "melhoria": settings.IMPROVEMENT_SPECIALIST_MODEL,
+            "dominio": settings.DOMAIN_SPECIALIST_MODEL,
+        },
+        catalog_source_dir=settings.CATALOG_SOURCE_DIR,
+        max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS,
     )
     consumer = AnalysisConsumer(
         processor.process, settings.RABBITMQ_URL, prefetch=settings.ANALYSIS_PREFETCH

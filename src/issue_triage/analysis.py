@@ -1,10 +1,13 @@
-"""Processamento de uma mensagem da fila `analysis` ("Contratos > Processamento", passos 1 a 5).
+"""Processamento de uma mensagem da fila `analysis` ("Contratos > Processamento", passos 1 a 8).
 
-Os especialistas ainda não existem (Etapa 8): com a decisão `bug`, `melhoria` ou `duvida`
-gravada, a tentativa fica `IN_PROGRESS` e a mensagem volta para a fila (`Outcome.REQUEUE`); na
-reentrega a decisão gravada é reutilizada, sem nova chamada ao roteador (D20).
+Com a decisão `bug`, `melhoria` ou `duvida`, o especialista da categoria roda fora de transação
+(D15), o validador decide e o commit 3 grava proposta, caso, tentativa e outbox juntos. Na
+retomada, a decisão gravada do roteador é reutilizada, sem nova chamada (RNF04).
 """
 
+import dataclasses
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -14,27 +17,43 @@ from pydantic import ValidationError
 
 from issue_triage.adapters import triage_store
 from issue_triage.adapters.catalog import find_project, list_guidelines
+from issue_triage.adapters.catalog_tools import docs_dir
 from issue_triage.adapters.inbound import find_origin_event, read_issue_text
+from issue_triage.domain.catalog import Project
 from issue_triage.domain.issue import OriginEvent
 from issue_triage.domain.messages import AnalysisMessage, Outcome
 from issue_triage.domain.prompts import ROUTER_PROMPT_VERSION
 from issue_triage.domain.router import RouterFailed, RouterLLM, route
-from issue_triage.domain.templates import render_missing_info
+from issue_triage.domain.specialist import SpecialistRunner
+from issue_triage.domain.specialist_flow import SpecialistOutcome, run_specialist
+from issue_triage.domain.templates import render_missing_info, render_triage
 
 logger = structlog.get_logger()
 
 
 class AnalysisProcessor:
-    """Aplica os passos 1 a 5 do processamento a uma mensagem da fila `analysis`.
+    """Aplica os passos 1 a 8 do processamento a uma mensagem da fila `analysis`.
 
-    Erros de banco sobem para o consumidor, que não confirma a mensagem e reconecta.
+    `specialist_models` dá o modelo de cada especialista (`bug`, `melhoria`, `dominio`, D16);
+    `catalog_source_dir` é a `CATALOG_SOURCE_DIR`. Erros de banco e do provedor sobem para o
+    consumidor, que não confirma a mensagem e reconecta (classificação na Etapa 10).
     """
 
     def __init__(
-        self, pool: AsyncConnectionPool, *, router: RouterLLM, max_manual_attempts: int
+        self,
+        pool: AsyncConnectionPool,
+        *,
+        router: RouterLLM,
+        specialist: SpecialistRunner,
+        specialist_models: Mapping[str, str],
+        catalog_source_dir: str | Path,
+        max_manual_attempts: int,
     ) -> None:
         self._pool = pool
         self._router = router
+        self._specialist = specialist
+        self._specialist_models = dict(specialist_models)
+        self._catalog_source_dir = Path(catalog_source_dir)
         self._max_manual_attempts = max_manual_attempts
 
     async def process(self, body: bytes) -> Outcome:
@@ -111,6 +130,7 @@ class AnalysisProcessor:
 
                 stored = await triage_store.find_route_decision(conn, opened.attempt_id)
                 guidelines = await list_guidelines(conn, origin.repository)
+                previous = await triage_store.list_previous_proposals(conn, opened)
 
             # Passo 5: roteador (Spec D). Retomada reutiliza a decisão gravada (RNF04); senão a
             # chamada roda fora de transação (D15) e a decisão é gravada no commit 2.
@@ -179,8 +199,98 @@ class AnalysisProcessor:
                     log.info("analysis.skipped_duplicate")
                 return Outcome.ACK
 
-        # Especialistas na Etapa 8: a tentativa fica IN_PROGRESS e a mensagem volta (D20).
-        return Outcome.REQUEUE
+            # Passos 6 e 7: especialista e validador, fora de transação (D15).
+            outcome = await run_specialist(
+                self._specialist,
+                category=stored.decision.category,
+                models=self._specialist_models,
+                project=project,
+                text=text,
+                guidelines=guidelines,
+                previous=previous,
+                docs_dir=docs_dir(self._catalog_source_dir, origin.repository),
+            )
+
+            # Passo 8: commit 3 (D15).
+            async with conn.transaction():
+                finished = await self._finish_specialist(conn, opened, origin, project, outcome)
+            if finished.outcome == "duplicate":
+                log.info("analysis.skipped_duplicate")
+            elif finished.applied and outcome.rejection is None:
+                log.info(
+                    "triage.proposal_validated",
+                    specialist=outcome.specialist,
+                    llm_calls=outcome.llm_calls,
+                    status=finished.outcome,
+                    status_reason=finished.status_reason,
+                )
+            elif finished.applied and outcome.rejection is not None:
+                log.info(
+                    "triage.proposal_invalid",
+                    validation_error=outcome.rejection.code,
+                    stage="specialist",
+                    status=finished.outcome,
+                    status_reason=finished.status_reason,
+                )
+        return Outcome.ACK
+
+    async def _finish_specialist(
+        self,
+        conn: AsyncConnection,
+        opened: triage_store.OpenedAttempt,
+        origin: OriginEvent,
+        project: Project,
+        outcome: SpecialistOutcome,
+    ) -> triage_store.FinishedAttempt:
+        """Grava a proposta do especialista com o status do caso (D24, D25).
+
+        Aprovada: `comment_body` do template, caso `READY_TO_PUBLISH (proposal_validated)` e
+        linha na outbox. Reprovada: proposta `INVALID` com as colunas da última saída que passou
+        na checagem 1 (ou nulas), caso `NEEDS_REVIEW (invalid_proposal)` e
+        `analysis_attempts.error = 'specialist: <código>: <detalhe>'`.
+        """
+        fields = outcome.output if outcome.output is not None else outcome.last_checked
+        columns: dict[str, Any] = {}
+        if fields is not None:
+            columns = fields.model_dump(exclude={"evidence"})
+            columns["evidence"] = [item.model_dump() for item in fields.evidence]
+        proposal = triage_store.TriageProposal(
+            specialist=outcome.specialist,
+            validation_status="VALID" if outcome.rejection is None else "INVALID",
+            validation_error=outcome.rejection.code if outcome.rejection else None,
+            prompt_version=outcome.prompt_version,
+            model=outcome.model,
+            raw_output=outcome.raw_output,
+            tool_calls=outcome.tool_calls,
+            **columns,
+        )
+        if outcome.output is not None:
+            comment = render_triage(
+                outcome.output,
+                specialist=outcome.specialist,
+                project=project.name,
+                responsible=project.responsible,
+                event_id=origin.event_id,
+                revision=opened.attempt,
+            )
+            proposal = dataclasses.replace(proposal, comment_body=comment)
+            status, status_reason, error = "READY_TO_PUBLISH", "proposal_validated", None
+        else:
+            assert outcome.rejection is not None
+            status, status_reason = "NEEDS_REVIEW", "invalid_proposal"
+            error = outcome.rejection.error
+        return await triage_store.finish_attempt(
+            conn,
+            opened,
+            event_id=origin.event_id,
+            repository=origin.repository,
+            issue_number=origin.issue_number,
+            status=status,
+            status_reason=status_reason,
+            max_manual_attempts=self._max_manual_attempts,
+            triage=proposal,
+            error=error,
+        )
 
     async def _open(
         self, conn: AsyncConnection, message: AnalysisMessage, origin: OriginEvent

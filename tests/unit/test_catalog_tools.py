@@ -274,13 +274,44 @@ def test_every_call_is_recorded_for_tool_calls(folder: Path) -> None:
         tools.call("read_doc", {"path": "nope.md"})
 
     first, second = tools.tool_calls()
-    assert set(first) == {"name", "arguments", "duration_ms", "result_chars", "truncated", "error"}
+    assert set(first) == {
+        "name",
+        "arguments",
+        "duration_ms",
+        "result_chars",
+        "truncated",
+        "error",
+        "paths",
+    }
     assert first["name"] == "read_doc"
     assert first["arguments"] == {"path": "a.md"}
     assert first["duration_ms"] >= 0
     assert first["result_chars"] == len(result["content"][0]["text"])
     assert (first["truncated"], first["error"]) == (True, None)
     assert (second["truncated"], second["error"]) == (False, "file_not_found")
+    assert (first["paths"], second["paths"]) == (["a.md"], [])
     tool_logs = [entry for entry in logs if entry["event"] == "triage.tool_call"]
     assert [entry["tool"] for entry in tool_logs] == ["read_doc", "read_doc"]
     assert "a" * 100 not in repr(logs)
+
+
+def test_paths_record_the_files_each_call_returned(folder: Path) -> None:
+    # D25: `paths` guarda os arquivos devolvidos por `read_doc` e `search_docs` (checagem 4).
+    _write(folder, "a.md", "pagamento recusado\noutra linha\npagamento aprovado")
+    _write(folder, "b.md", "nada aqui")
+    _write(folder, "c.md", "pagamento pendente")
+    tools = _tools(folder)
+
+    tools.call("list_docs", {})
+    tools.call("search_docs", {"query": "pagamento"})
+    tools.call("search_docs", {"query": "inexistente"})
+    tools.call("read_doc", {"path": "b.md"})
+    tools.call("read_doc", {"path": "../b.md"})
+
+    assert [call["paths"] for call in tools.tool_calls()] == [
+        [],
+        ["a.md", "c.md"],
+        [],
+        ["b.md"],
+        [],
+    ]
