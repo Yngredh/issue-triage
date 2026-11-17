@@ -2,6 +2,8 @@ import asyncio
 import os
 import signal
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import pytest
 import structlog
@@ -24,7 +26,15 @@ def settings(monkeypatch: pytest.MonkeyPatch) -> Settings:
 
 
 async def test_worker_runs_until_stop_requested(settings: Settings) -> None:
-    worker = Worker(settings)
+    services_running = []
+
+    @asynccontextmanager
+    async def fake_services(_settings: Settings) -> AsyncIterator[None]:
+        services_running.append(True)
+        yield
+        services_running.append(False)
+
+    worker = Worker(settings, services=fake_services)
 
     with structlog.testing.capture_logs() as logs:
         task = asyncio.create_task(worker.run())
@@ -36,6 +46,7 @@ async def test_worker_runs_until_stop_requested(settings: Settings) -> None:
 
     events = [entry["event"] for entry in logs]
     assert events == ["worker.started", "worker.stop_requested", "worker.stopped"]
+    assert services_running == [True, False]
     assert API_KEY not in repr(logs)
 
 

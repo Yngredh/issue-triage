@@ -1,10 +1,14 @@
 import asyncio
 import signal
 import sys
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 import structlog
 
+from issue_triage.adapters.analysis_consumer import AnalysisConsumer
+from issue_triage.adapters.database import close_pool, create_pool, open_pool
+from issue_triage.analysis import AnalysisProcessor
 from issue_triage.config import Settings
 
 logger = structlog.get_logger()
@@ -23,16 +27,41 @@ def install_stop_handlers(loop: asyncio.AbstractEventLoop, stop: Callable[[], No
             loop.add_signal_handler(sig, stop)
 
 
+ServicesFactory = Callable[[Settings], AbstractAsyncContextManager[None]]
+
+
+@asynccontextmanager
+async def analysis_services(settings: Settings) -> AsyncIterator[None]:
+    """Pool do banco e consumidor da fila `analysis` (Etapa 4), ativos enquanto o bloco dura.
+
+    Na saída o consumidor para de consumir e termina a mensagem em curso antes de o pool fechar.
+    """
+    pool = create_pool(settings.DATABASE_URL)
+    await open_pool(pool)
+    processor = AnalysisProcessor(pool, max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS)
+    consumer = AnalysisConsumer(
+        processor.process, settings.RABBITMQ_URL, prefetch=settings.ANALYSIS_PREFETCH
+    )
+    consumer.start()
+    try:
+        yield
+    finally:
+        await consumer.stop()
+        await close_pool(pool)
+
+
 class Worker:
     """Worker sem HTTP do issue-triage (D4).
 
     Roda até o pedido de parada. O consumidor da fila `analysis` (Etapa 4) e o relay da
-    `publish_outbox` (Etapa 5) entram como tarefas deste mesmo processo; ao receber o pedido de
-    parada, deixam de consumir, terminam a mensagem em curso e fecham as conexões.
+    `publish_outbox` (Etapa 5) rodam como tarefas deste mesmo processo, criadas por `services`;
+    ao receber o pedido de parada, deixam de consumir, terminam a mensagem em curso e fecham as
+    conexões.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, services: ServicesFactory = analysis_services) -> None:
         self._settings = settings
+        self._services = services
         self._stop = asyncio.Event()
 
     def request_stop(self) -> None:
@@ -45,7 +74,8 @@ class Worker:
         """Executa até o pedido de parada."""
         logger.info("worker.started", log_level=self._settings.LOG_LEVEL)
         try:
-            await self._stop.wait()
+            async with self._services(self._settings):
+                await self._stop.wait()
         finally:
             logger.info("worker.stopped")
 

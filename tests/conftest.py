@@ -13,6 +13,7 @@ import psycopg
 import pytest
 from psycopg.types.json import Jsonb
 from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.rabbitmq import RabbitMqContainer
 
 from issue_triage.migrate import apply_migrations
 
@@ -46,6 +47,15 @@ def database_url(postgres_container: PostgresContainer) -> str:
         conn.execute(CATALOG_SEED.read_text(encoding="utf-8"))
     apply_migrations(url)
     return url
+
+
+@pytest.fixture(scope="session")
+def rabbitmq_url() -> Iterator[str]:
+    """URL AMQP de um RabbitMQ do testcontainers (imagem da D5), um por sessão de testes."""
+    with RabbitMqContainer("rabbitmq:3-management") as container:
+        host = container.get_container_host_ip()
+        port = container.get_exposed_port(container.port)
+        yield f"amqp://{container.username}:{container.password}@{host}:{port}/"
 
 
 @pytest.fixture
@@ -253,3 +263,21 @@ class TestData:
 def data(db_conn: psycopg.Connection) -> TestData:
     """Fábrica de dados de teste ligada à conexão do teste (desfeita ao fim)."""
     return TestData(db_conn)
+
+
+@pytest.fixture
+def committed_data(database_url: str) -> Iterator[TestData]:
+    """Fábrica com autocommit, para dados lidos pelo worker em outras conexões.
+
+    Ao fim do teste, `triage` e `inbound` são esvaziados (só nos testes), para não interferir
+    nos testes que usam a transação desfeita de `db_conn`. O catálogo da seed não é tocado.
+    """
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        try:
+            yield TestData(conn)
+        finally:
+            conn.execute(
+                "TRUNCATE triage.publish_outbox, triage.proposals, triage.route_decisions, "
+                "triage.analysis_attempts, triage.issue_cases, "
+                "inbound.issue_review_history, inbound.issue_events"
+            )

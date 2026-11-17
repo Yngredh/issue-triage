@@ -484,13 +484,13 @@ Requisitos: RF26, RF10, RNF13. Depende de: Etapa 2. Pré-condição: decisões D
 
 ### Etapa 4 — Consumo da fila analysis e ciclo da tentativa (sem IA)
 Requisitos: RF09, RF10, RF11, RF20, RF28, RNF04. Depende de: Etapa 3. Pré-condição: decisões D3, D6, D14 e D15 validadas.
-- [ ] Modelo Pydantic da mensagem `analysis` (contrato de "Contratos > Mensagem da fila `analysis`", sem `close` até P1).
-- [ ] Passos 1 a 3 do processamento: validação, leitura do evento de origem, abertura ou retomada da tentativa por `trigger` (`initial`, `author_edit`, `enrich`, `reprocess`), descarte de repetida, obsoleta e edição fora de estado.
-- [ ] Texto atual da issue e enriquecimentos (D14).
-- [ ] Passo 4 (harness): `unknown_repo` sem chamar a IA; descrição vazia gera a proposta `missing_info` com o template de pedido de informações (`MISSING_INFO_TEMPLATE`, texto literal de "Contratos > Templates") e a linha na `publish_outbox`, na mesma transação.
-- [ ] Regra de fechamento por `MAX_MANUAL_ATTEMPTS` (RF30).
-- [ ] Consumidor da fila `analysis` com ack manual, `prefetch = ANALYSIS_PREFETCH`, ack só depois do commit; banco ou broker fora não confirma a mensagem e reconecta com backoff de 1 s a 30 s. Nesta etapa, uma issue que chegaria ao roteador fica `IN_PROGRESS` e a mensagem volta para a fila (o roteador entra na Etapa 6); o teste confere só o que esta etapa entrega.
-- [ ] Testes de integração (RabbitMQ e PostgreSQL reais): mesma mensagem entregue duas vezes abre uma só tentativa; repositório fora do catálogo vira `NEEDS_REVIEW (unknown_repo)` (caso H04); descrição vazia ou só com espaços vira `READY_TO_PUBLISH (empty_description)` com `comment_body` contendo o marcador e o responsável, e uma linha na outbox (casos H05 e H06); edição do autor em `empty_description` abre `current_attempt + 1`; edição fora desse estado e reentrega da mesma edição são ignoradas; `enrich` incrementa `manual_attempts`; resultado de revisão com `manual_attempts` no limite vira `MAX_RETRIES_REACHED`; mensagem inválida e `eventId` inexistente são descartados.
+- [x] Modelo Pydantic da mensagem `analysis` (contrato de "Contratos > Mensagem da fila `analysis`", sem `close` até P1).
+- [x] Passos 1 a 3 do processamento: validação, leitura do evento de origem, abertura ou retomada da tentativa por `trigger` (`initial`, `author_edit`, `enrich`, `reprocess`), descarte de repetida, obsoleta e edição fora de estado.
+- [x] Texto atual da issue e enriquecimentos (D14).
+- [x] Passo 4 (harness): `unknown_repo` sem chamar a IA; descrição vazia gera a proposta `missing_info` com o template de pedido de informações (`MISSING_INFO_TEMPLATE`, texto literal de "Contratos > Templates") e a linha na `publish_outbox`, na mesma transação.
+- [x] Regra de fechamento por `MAX_MANUAL_ATTEMPTS` (RF30).
+- [x] Consumidor da fila `analysis` com ack manual, `prefetch = ANALYSIS_PREFETCH`, ack só depois do commit; banco ou broker fora não confirma a mensagem e reconecta com backoff de 1 s a 30 s. Nesta etapa, uma issue que chegaria ao roteador fica `IN_PROGRESS` e a mensagem volta para a fila (o roteador entra na Etapa 6); o teste confere só o que esta etapa entrega.
+- [x] Testes de integração (RabbitMQ e PostgreSQL reais): mesma mensagem entregue duas vezes abre uma só tentativa; repositório fora do catálogo vira `NEEDS_REVIEW (unknown_repo)` (caso H04); descrição vazia ou só com espaços vira `READY_TO_PUBLISH (empty_description)` com `comment_body` contendo o marcador e o responsável, e uma linha na outbox (casos H05 e H06); edição do autor em `empty_description` abre `current_attempt + 1`; edição fora desse estado e reentrega da mesma edição são ignoradas; `enrich` incrementa `manual_attempts`; resultado de revisão com `manual_attempts` no limite vira `MAX_RETRIES_REACHED`; mensagem inválida e `eventId` inexistente são descartados.
 
 ### Etapa 5 — Relay da publish_outbox
 Requisitos: RF21, RNF05. Depende de: Etapa 4. Pré-condição: decisões D6 e D7 validadas.
