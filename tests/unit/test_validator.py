@@ -278,6 +278,23 @@ def test_free_text_claims_backed_by_evidence_pass(folder: Path) -> None:
     )
 
 
+def test_email_in_free_text_is_not_a_mention(folder: Path) -> None:
+    # D27: o `@` colado em letra (e-mail) não é menção.
+    output = _output(summary="Escrever para suporte@oficina.com sobre o erro.")
+
+    result = validate(output, ctx=_ctx(folder), tool_calls=_read(folder))
+
+    assert isinstance(result, SpecialistOutput)
+
+
+def test_mention_of_another_person_is_still_rejected(folder: Path) -> None:
+    output = _output(summary="Falar com @outra-pessoa sobre o erro.")
+
+    result = validate(output, ctx=_ctx(folder), tool_calls=_read(folder))
+
+    assert _code(result) == "ungrounded_claim"
+
+
 def test_answer_is_checked_for_free_text_claims(folder: Path) -> None:
     ctx = _ctx(folder, "dominio", "duvida")
     output = _output(category="duvida", answer="Veja docs/manual.md.")

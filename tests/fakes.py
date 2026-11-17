@@ -125,6 +125,7 @@ def make_processor(
     router: FakeRouterLLM | None = None,
     specialist: FakeSpecialistRunner | None = None,
     max_manual_attempts: int = 2,
+    retry_delays_s: tuple[float, ...] = (0.01, 0.01),
 ) -> AnalysisProcessor:
     """`AnalysisProcessor` com as portas falsas; sem respostas, qualquer chamada falha o teste."""
     return AnalysisProcessor(
@@ -134,6 +135,7 @@ def make_processor(
         specialist_models=SPECIALIST_MODELS,
         catalog_source_dir=CATALOG_SOURCE_DIR,
         max_manual_attempts=max_manual_attempts,
+        retry_delays_s=retry_delays_s,
     )
 
 

@@ -35,6 +35,7 @@ from issue_triage.domain.specialist import (
     SpecialistName,
     SpecialistOutput,
 )
+from issue_triage.domain.templates import MENTION
 
 SCHEMA_INVALID = "schema_invalid"
 CATEGORY_MISMATCH = "category_mismatch"
@@ -45,10 +46,9 @@ PROMPT_LEAK = "prompt_leak"
 
 ISSUE_REFS = ("title", "description")
 
-# Checagem 6 (D24): caminho de arquivo, nome de código entre crases e `@menção`.
+# Checagem 6 (D24): caminho de arquivo e nome de código entre crases (`@menção`: `MENTION`, D27).
 FILE_PATH = re.compile(r"[\w./-]+\.(md|py|java|ts|js|sql|ya?ml|json|xml|properties)\b", re.I)
 CODE_NAME = re.compile(r"`([^`]+)`")
-MENTION = re.compile(r"@[\w-]+")
 
 _FREE_TEXT_FIELDS = ("summary", "next_step", "conclusion_reason", "answer")
 

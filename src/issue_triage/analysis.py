@@ -5,10 +5,11 @@ Com a decisão `bug`, `melhoria` ou `duvida`, o especialista da categoria roda f
 retomada, a decisão gravada do roteador é reutilizada, sem nova chamada (RNF04).
 """
 
+import asyncio
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import structlog
 from psycopg import AsyncConnection
@@ -19,6 +20,7 @@ from issue_triage.adapters import triage_store
 from issue_triage.adapters.catalog import find_project, list_guidelines
 from issue_triage.adapters.catalog_tools import docs_dir
 from issue_triage.adapters.inbound import find_origin_event, read_issue_text
+from issue_triage.adapters.provider_errors import TechnicalFailure, classify
 from issue_triage.domain.catalog import Project
 from issue_triage.domain.issue import OriginEvent
 from issue_triage.domain.messages import AnalysisMessage, Outcome
@@ -30,13 +32,28 @@ from issue_triage.domain.templates import render_missing_info, render_triage
 
 logger = structlog.get_logger()
 
+T = TypeVar("T")
+
+
+class _TechnicalFailed(Exception):
+    """Falha técnica sem nova tentativa: permanente ou tentativas esgotadas (D28)."""
+
+    def __init__(self, error: str, stage: str) -> None:
+        super().__init__(error)
+        self.error = error
+        self.stage = stage
+
 
 class AnalysisProcessor:
     """Aplica os passos 1 a 8 do processamento a uma mensagem da fila `analysis`.
 
     `specialist_models` dá o modelo de cada especialista (`bug`, `melhoria`, `dominio`, D16);
-    `catalog_source_dir` é a `CATALOG_SOURCE_DIR`. Erros de banco e do provedor sobem para o
-    consumidor, que não confirma a mensagem e reconecta (classificação na Etapa 10).
+    `catalog_source_dir` é a `CATALOG_SOURCE_DIR`. Erros de banco sobem para o consumidor, que
+    não confirma a mensagem e reconecta. Falhas da chamada ao roteador ou ao especialista são
+    classificadas (D28): as transitórias esperam `retry_delays_s` (`ANALYSIS_RETRY_DELAYS_S`) com
+    `asyncio.sleep`, sem ack, e repetem só a etapa que falhou; os atrasos são consumidos ao longo
+    da mensagem (3 tentativas ao todo com `10,30`). Esgotadas ou permanentes, a tentativa termina
+    `NEEDS_REVIEW (technical_failure)`.
     """
 
     def __init__(
@@ -48,6 +65,7 @@ class AnalysisProcessor:
         specialist_models: Mapping[str, str],
         catalog_source_dir: str | Path,
         max_manual_attempts: int,
+        retry_delays_s: Sequence[float] = (10, 30),
     ) -> None:
         self._pool = pool
         self._router = router
@@ -55,9 +73,11 @@ class AnalysisProcessor:
         self._specialist_models = dict(specialist_models)
         self._catalog_source_dir = Path(catalog_source_dir)
         self._max_manual_attempts = max_manual_attempts
+        self._retry_delays_s = tuple(retry_delays_s)
 
     async def process(self, body: bytes) -> Outcome:
         """Processa o corpo da mensagem; só devolve depois do commit."""
+        retries = iter(self._retry_delays_s)
         try:
             message = AnalysisMessage.model_validate_json(body)
         except ValidationError as exc:
@@ -135,14 +155,22 @@ class AnalysisProcessor:
             # Passo 5: roteador (Spec D). Retomada reutiliza a decisão gravada (RNF04); senão a
             # chamada roda fora de transação (D15) e a decisão é gravada no commit 2.
             if stored is None:
-                result = await route(
-                    self._router,
-                    repository=origin.repository,
-                    title=text.title,
-                    description=text.description,
-                    enrichments=text.enrichments,
-                    guidelines=guidelines,
-                )
+                try:
+                    result = await self._call_provider(
+                        log,
+                        "router",
+                        retries,
+                        lambda: route(
+                            self._router,
+                            repository=origin.repository,
+                            title=text.title,
+                            description=text.description,
+                            enrichments=text.enrichments,
+                            guidelines=guidelines,
+                        ),
+                    )
+                except _TechnicalFailed as failed:
+                    return await self._technical_failure(conn, log, opened, origin, failed)
                 if isinstance(result, RouterFailed):
                     async with conn.transaction():
                         finished = await triage_store.finish_attempt(
@@ -200,16 +228,24 @@ class AnalysisProcessor:
                 return Outcome.ACK
 
             # Passos 6 e 7: especialista e validador, fora de transação (D15).
-            outcome = await run_specialist(
-                self._specialist,
-                category=stored.decision.category,
-                models=self._specialist_models,
-                project=project,
-                text=text,
-                guidelines=guidelines,
-                previous=previous,
-                docs_dir=docs_dir(self._catalog_source_dir, origin.repository),
-            )
+            try:
+                outcome = await self._call_provider(
+                    log,
+                    "specialist",
+                    retries,
+                    lambda: run_specialist(
+                        self._specialist,
+                        category=stored.decision.category,
+                        models=self._specialist_models,
+                        project=project,
+                        text=text,
+                        guidelines=guidelines,
+                        previous=previous,
+                        docs_dir=docs_dir(self._catalog_source_dir, origin.repository),
+                    ),
+                )
+            except _TechnicalFailed as failed:
+                return await self._technical_failure(conn, log, opened, origin, failed)
 
             # Passo 8: commit 3 (D15).
             async with conn.transaction():
@@ -232,6 +268,62 @@ class AnalysisProcessor:
                     status=finished.outcome,
                     status_reason=finished.status_reason,
                 )
+        return Outcome.ACK
+
+    async def _call_provider(
+        self,
+        log: Any,
+        stage: str,
+        retries: Iterator[float],
+        call: Callable[[], Awaitable[T]],
+    ) -> T:
+        """Roda a chamada ao roteador ou ao especialista com a nova tentativa da D28.
+
+        Transitória com atraso disponível: log `triage.retry_scheduled`, `asyncio.sleep` sem ack
+        e repete só esta etapa. Permanente, inesperada ou sem atraso: `_TechnicalFailed`.
+        """
+        while True:
+            try:
+                return await call()
+            except Exception as exc:
+                failure: TechnicalFailure = classify(exc)
+            delay = next(retries, None) if failure.transient else None
+            if delay is None:
+                raise _TechnicalFailed(failure.error, stage)
+            log.warning("triage.retry_scheduled", stage=stage, error=failure.error, delay_s=delay)
+            await asyncio.sleep(delay)
+
+    async def _technical_failure(
+        self,
+        conn: AsyncConnection,
+        log: Any,
+        opened: triage_store.OpenedAttempt,
+        origin: OriginEvent,
+        failed: _TechnicalFailed,
+    ) -> Outcome:
+        """`NEEDS_REVIEW (technical_failure)` com o erro gravado e ack (D28)."""
+        async with conn.transaction():
+            finished = await triage_store.finish_attempt(
+                conn,
+                opened,
+                event_id=origin.event_id,
+                repository=origin.repository,
+                issue_number=origin.issue_number,
+                status="NEEDS_REVIEW",
+                status_reason="technical_failure",
+                max_manual_attempts=self._max_manual_attempts,
+                error=failed.error,
+            )
+        if finished.outcome == "duplicate":
+            log.info("analysis.skipped_duplicate")
+        elif finished.applied:
+            log.error(
+                "triage.technical_failure",
+                stage=failed.stage,
+                error=failed.error,
+                status=finished.outcome,
+                status_reason=finished.status_reason,
+            )
         return Outcome.ACK
 
     async def _finish_specialist(

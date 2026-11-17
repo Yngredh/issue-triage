@@ -72,6 +72,7 @@ async def worker_services(settings: Settings) -> AsyncIterator[None]:
         },
         catalog_source_dir=settings.CATALOG_SOURCE_DIR,
         max_manual_attempts=settings.MAX_MANUAL_ATTEMPTS,
+        retry_delays_s=settings.ANALYSIS_RETRY_DELAYS_S,
     )
     consumer = AnalysisConsumer(
         processor.process, settings.RABBITMQ_URL, prefetch=settings.ANALYSIS_PREFETCH

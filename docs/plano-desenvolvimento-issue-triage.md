@@ -724,11 +724,11 @@ Requisitos: RF19, RF21, RNF09, RNF10. Depende de: Etapas 5 e 8. (O template, a l
 
 ### Etapa 10 — Falhas técnicas
 Requisitos: RNF08. Depende de: Etapa 9.
-- [ ] Correções da D27 (Etapas 8 e 9): a) a checagem 6 usa a regra de `@menção` da D26, com a regex numa constante compartilhada com a limpeza (teste: `a@b.com` no `summary` não reprova; `@outra-pessoa` ainda reprova); b) os testes de ponta a ponta E01 a E04 seguem a documentação Casos de teste — Roteador e especialistas (E01 e E02 bug, E03 melhoria, E04 domínio com resposta de ausência de informação e evidência do catálogo). Não rodar `ruff format .` no repositório inteiro: formatar só os arquivos da etapa.
-- [ ] Classificação de erros dos dois SDKs em transitório e permanente (Issue Triage Spec, seção 6) conforme a D28 (regras por status, falhas sem status, exceção inesperada e formato `provider: <tipo>: <status>` em `error` e nos logs), atrás das portas.
-- [ ] Nova tentativa no próprio consumidor com `ANALYSIS_RETRY_DELAYS_S`, sem ack durante a espera (log `triage.retry_scheduled`); esgotadas ou permanente → `NEEDS_REVIEW (technical_failure)` com `analysis_attempts.error`, e ack.
-- [ ] Tempo esgotado do roteador e do especialista conta como transitório. A nova tentativa repete só a etapa que falhou, reaproveitando a decisão do roteador gravada, e há 3 tentativas ao todo (D28).
-- [ ] Testes de integração com atrasos curtos (por exemplo `ANALYSIS_RETRY_DELAYS_S=1,1`): 503, 503 e sucesso terminam em proposta válida; três 503 terminam em `technical_failure`; 401 termina em `technical_failure` sem esperar; processo derrubado com tentativa `IN_PROGRESS` é retomado sem nova chamada ao roteador.
+- [x] Correções da D27 (Etapas 8 e 9): a) a checagem 6 usa a regra de `@menção` da D26, com a regex numa constante compartilhada com a limpeza (teste: `a@b.com` no `summary` não reprova; `@outra-pessoa` ainda reprova); b) os testes de ponta a ponta E01 a E04 seguem a documentação Casos de teste — Roteador e especialistas (E01 e E02 bug, E03 melhoria, E04 domínio com resposta de ausência de informação e evidência do catálogo). Não rodar `ruff format .` no repositório inteiro: formatar só os arquivos da etapa.
+- [x] Classificação de erros dos dois SDKs em transitório e permanente (Issue Triage Spec, seção 6) conforme a D28 (regras por status, falhas sem status, exceção inesperada e formato `provider: <tipo>: <status>` em `error` e nos logs), atrás das portas.
+- [x] Nova tentativa no próprio consumidor com `ANALYSIS_RETRY_DELAYS_S`, sem ack durante a espera (log `triage.retry_scheduled`); esgotadas ou permanente → `NEEDS_REVIEW (technical_failure)` com `analysis_attempts.error`, e ack.
+- [x] Tempo esgotado do roteador e do especialista conta como transitório. A nova tentativa repete só a etapa que falhou, reaproveitando a decisão do roteador gravada, e há 3 tentativas ao todo (D28).
+- [x] Testes de integração com atrasos curtos (por exemplo `ANALYSIS_RETRY_DELAYS_S=1,1`): 503, 503 e sucesso terminam em proposta válida; três 503 terminam em `technical_failure`; 401 termina em `technical_failure` sem esperar; processo derrubado com tentativa `IN_PROGRESS` é retomado sem nova chamada ao roteador.
 
 ### Etapa 11 — Resolução manual: encerramento
 Requisitos: RF29. Depende de: Etapa 4. Pré-condição: P1 decidido.

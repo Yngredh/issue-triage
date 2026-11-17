@@ -3,6 +3,7 @@
 PostgreSQL real (testcontainers) e o `FakeRouterLLM` (D10); nenhuma chamada à Anthropic.
 """
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
 
@@ -119,11 +120,11 @@ async def test_category_is_saved_with_the_decision_and_redelivery_reuses_it(
         repository=ORDERS, title="Exportar relatório", description="Adicionar exportação em CSV."
     )
     router = FakeRouterLLM([decision("melhoria", "exportação em CSV")])
-    # A primeira entrega cai no especialista (erro do provedor sobe e a mensagem volta).
-    specialist = FakeSpecialistRunner([RuntimeError("provider down"), _limit_turn()])
+    # A primeira entrega cai no especialista (processo derrubado; a mensagem volta).
+    specialist = FakeSpecialistRunner([asyncio.CancelledError(), _limit_turn()])
     processor = make_processor(pool, router=router, specialist=specialist)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(asyncio.CancelledError):
         await processor.process(body(initial(origin)))
     case = case_row(db, origin.event_id)
     assert (case["status"], case["status_reason"], case["category"]) == (
@@ -293,9 +294,7 @@ async def test_router_failing_twice_on_reprocess_keeps_the_last_category(
     origin = committed_data.origin_event(
         repository=ORDERS, title="Erro 500", description="Ao enviar o formulário, recebo erro 500."
     )
-    router = FakeRouterLLM(
-        [decision("bug", "recebo erro 500"), decision("bug", "banco caiu"), {}]
-    )
+    router = FakeRouterLLM([decision("bug", "recebo erro 500"), decision("bug", "banco caiu"), {}])
     # O especialista da tentativa 1 estoura um limite: o caso vai para a revisão e o revisor
     # pede o reprocessamento.
     specialist = FakeSpecialistRunner([_limit_turn()])

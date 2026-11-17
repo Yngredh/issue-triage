@@ -70,8 +70,9 @@ MAX_ANSWER = 1000
 MAX_QUOTE = 300
 
 _HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
-# O `@` colado em letra, número, `.`, `_` ou `-` (como em e-mail) não é menção (D26).
-_MENTION = re.compile(r"(?<![\w.-])@[\w-]+")
+# O `@` colado em letra, número, `.`, `_` ou `-` (como em e-mail) não é menção (D26, D27). Regra
+# única da limpeza e da checagem 6 do validador.
+MENTION = re.compile(r"(?<![\w.-])@[\w-]+")
 
 
 def render_missing_info(*, project: str, responsible: str, event_id: str, revision: int) -> str:
@@ -97,7 +98,7 @@ def clean_text(text: str, *, responsible: str, max_chars: int | None = None) -> 
         previous = text
         text = _HTML_TAG.sub("", text)
         text = text.replace("<!--", "").replace("-->", "")
-        text = _MENTION.sub(
+        text = MENTION.sub(
             lambda match: match.group(0) if _is_responsible(match.group(0), responsible) else "",
             text,
         )

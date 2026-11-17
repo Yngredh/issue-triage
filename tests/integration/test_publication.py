@@ -6,7 +6,7 @@ chamada à Anthropic.
 """
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import psycopg
@@ -48,46 +48,66 @@ def _issue_evidence(quote: str) -> dict[str, str]:
     return {"source": "issue", "ref": "description", "quote": quote}
 
 
-# Casos E01 a E03 (bug, melhoria e dúvida com evidência do catálogo) e E04 (documentação não
-# cobre o ponto: `sem_informacao` sem evidência do catálogo; o `answer` do domínio exigiria uma).
+# Casos E01 a E04 da documentação "Casos de teste — Roteador e especialistas" (D27). O plano só
+# descreve cada caso (E01: bug, R01, erro 500 no login, responsável @ana-teste; E02: bug, R04,
+# erro 500 no Safari; E03: melhoria, R02, exportação CSV; E04: domínio, R09, reembolso parcial,
+# responsável @bruno-teste); os textos da issue, o repositório e o trecho do catálogo abaixo são
+# representativos. Em E04 o catálogo não cobre o ponto: a resposta diz que não há informação,
+# aponta a documentação da API e o responsável, com evidência do catálogo (checagem 5).
 CASES = {
     "E01": (
         "bug",
-        "Ao mudar a ordem 12 para IN_PROGRESS a API devolve 500.",
-        "a API devolve 500",
-        specialist_output("bug", evidence=[_issue_evidence("a API devolve 500"), CATALOG]),
-        READ,
-    ),
-    "E02": (
-        "melhoria",
-        "Seria bom filtrar as ordens por mecânico.",
-        "filtrar as ordens por mecânico",
-        specialist_output(
-            "melhoria", evidence=[_issue_evidence("filtrar as ordens por mecânico"), CATALOG]
-        ),
-        READ,
-    ),
-    "E03": (
-        "duvida",
-        "Quando a ordem passa para IN_PROGRESS?",
-        "Quando a ordem passa para IN_PROGRESS",
-        specialist_output(
-            "duvida",
-            answer="Quando o mecânico inicia a execução dos reparos.",
-            evidence=[_issue_evidence("Quando a ordem passa para IN_PROGRESS"), CATALOG],
-        ),
-        READ,
-    ),
-    "E04": (
-        "bug",
-        "O desconto para cliente antigo não é aplicado na ordem.",
-        "desconto para cliente antigo",
+        "Erro 500 no login",
+        "Ao entrar com usuário e senha corretos o login devolve erro 500.",
+        "o login devolve erro 500",
         specialist_output(
             "bug",
-            conclusion="sem_informacao",
-            evidence=[_issue_evidence("desconto para cliente antigo")],
+            summary="O login devolve erro 500 com credenciais corretas.",
+            evidence=[_issue_evidence("o login devolve erro 500"), CATALOG],
         ),
-        (),
+        "@ana-teste",
+    ),
+    "E02": (
+        "bug",
+        "Erro 500 no Safari",
+        "No Safari a tela de ordens abre com erro 500, no Chrome funciona.",
+        "No Safari a tela de ordens abre com erro 500",
+        specialist_output(
+            "bug",
+            summary="A tela de ordens devolve erro 500 só no Safari.",
+            evidence=[_issue_evidence("No Safari a tela de ordens abre com erro 500"), CATALOG],
+        ),
+        "@Yaane-h",
+    ),
+    "E03": (
+        "melhoria",
+        "Exportar ordens em CSV",
+        "Seria útil exportar a lista de ordens em CSV.",
+        "exportar a lista de ordens em CSV",
+        specialist_output(
+            "melhoria",
+            summary="Pedido de exportação da lista de ordens em CSV.",
+            evidence=[_issue_evidence("exportar a lista de ordens em CSV"), CATALOG],
+        ),
+        "@Yaane-h",
+    ),
+    "E04": (
+        "duvida",
+        "Reembolso parcial",
+        "O sistema permite reembolso parcial de uma ordem já paga?",
+        "reembolso parcial de uma ordem já paga",
+        specialist_output(
+            "duvida",
+            summary="Dúvida sobre reembolso parcial de uma ordem paga.",
+            conclusion="sem_informacao",
+            conclusion_reason="A documentação do projeto não trata de reembolso parcial.",
+            answer=(
+                "A documentação do projeto não tem informação sobre reembolso parcial. "
+                "Consulte a documentação da API ou fale com @bruno-teste."
+            ),
+            evidence=[_issue_evidence("reembolso parcial de uma ordem já paga"), CATALOG],
+        ),
+        "@bruno-teste",
     ),
 }
 
@@ -129,14 +149,33 @@ async def _publish_to_queue(
     return _proposal_ids(database_url, origin.event_id), messages, specialist
 
 
+@pytest.fixture
+def set_responsible(database_url: str) -> Iterator[Callable[[str], None]]:
+    """Troca o responsável do projeto de `ORDERS` e restaura o da seed ao fim do teste."""
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        original = conn.execute(
+            "SELECT responsible FROM catalog.projects WHERE repository = %s", (ORDERS,)
+        ).fetchone()[0]
+
+        def change(responsible: str) -> None:
+            conn.execute(
+                "UPDATE catalog.projects SET responsible = %s WHERE repository = %s",
+                (responsible, ORDERS),
+            )
+
+        try:
+            yield change
+        finally:
+            change(original)
+
+
 @pytest.mark.parametrize("case", list(CASES), ids=list(CASES))
 async def test_triage_reaches_the_publish_queue(
-    case: str, pool, database_url, rabbitmq_url, committed_data: TestData
+    case: str, pool, database_url, rabbitmq_url, committed_data: TestData, set_responsible
 ) -> None:
-    category, description, evidence, output, tool_calls = CASES[case]
-    origin = committed_data.origin_event(
-        repository=ORDERS, title="Pergunta sobre ordens", description=description
-    )
+    category, title, description, evidence, output, responsible = CASES[case]
+    set_responsible(responsible)
+    origin = committed_data.origin_event(repository=ORDERS, title=title, description=description)
 
     ids, messages, specialist = await _publish_to_queue(
         pool,
@@ -146,7 +185,7 @@ async def test_triage_reaches_the_publish_queue(
         category=category,
         evidence=evidence,
         output=output,
-        tool_calls=tool_calls,
+        tool_calls=READ,
     )
 
     [proposal_id] = ids  # a mensagem repetida não gera segunda proposta
@@ -156,8 +195,12 @@ async def test_triage_reaches_the_publish_queue(
     comment = _comment(database_url, proposal_id)
     assert comment.count("<!-- triage:") == 1
     assert comment.endswith(f"<!-- triage:{origin.event_id}:1 -->")
-    assert "**Responsável:** @Yaane-h" in comment
+    assert f"**Responsável:** {responsible}" in comment
     assert comment.startswith("## Triagem automática: ")
+    if case == "E04":
+        assert "não tem informação sobre reembolso parcial" in comment
+        assert "documentação da API" in comment
+        assert "@bruno-teste" in comment
 
 
 async def test_model_text_with_a_marker_does_not_create_a_second_one(
