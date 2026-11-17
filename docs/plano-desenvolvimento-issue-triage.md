@@ -417,12 +417,12 @@ Requisitos: RNF14, RNF18. Depende de: primeiro pré-requisito (esqueleto commita
 
 ### Etapa 2 — Schema triage, migrações e dados de teste
 Requisitos: RNF07, RNF04. Depende de: Etapa 1. Pré-condição: decisões D2 e D9 validadas.
-- [ ] Criar `migrations/0001_triage_schema.sql` com o DDL de "Modelo de dados > Schema `triage`", incluindo a view.
-- [ ] Criar o runner `python -m issue_triage.migrate` (D2), idempotente.
-- [ ] Criar o adaptador de conexão em `adapters/` (pool assíncrono do psycopg).
-- [ ] Criar `tests/fixtures/sql/inbound_stub.sql` com o conteúdo exato de "Modelo de dados > Leitura de `inbound`".
-- [ ] Criar fixtures em `tests/conftest.py`: PostgreSQL do testcontainers por sessão com o stub de `inbound`, `catalog/schema.sql` e as migrações aplicados, e uma fábrica de dados de teste (evento de origem, edição, resolução do revisor, projeto do catálogo com orientações).
-- [ ] Testes de integração: `UNIQUE (event_id, attempt)`; índice `analysis_attempts_one_per_edit`; `CHECK` de status e motivo; `route_decisions` com evidência vazia fora de `indeterminado` é recusada; proposta `INVALID` sem `validation_error` é recusada; `UNIQUE (topic, dedup_key)` da outbox; a view devolve as colunas que o issue-publisher lê; o runner é idempotente.
+- [x] Criar `migrations/0001_triage_schema.sql` com o DDL de "Modelo de dados > Schema `triage`", incluindo a view.
+- [x] Criar o runner `python -m issue_triage.migrate` (D2), idempotente.
+- [x] Criar o adaptador de conexão em `adapters/` (pool assíncrono do psycopg).
+- [x] Criar `tests/fixtures/sql/inbound_stub.sql` com o conteúdo exato de "Modelo de dados > Leitura de `inbound`".
+- [x] Criar fixtures em `tests/conftest.py`: PostgreSQL do testcontainers por sessão com o stub de `inbound`, `catalog/schema.sql` e as migrações aplicados, e uma fábrica de dados de teste (evento de origem, edição, resolução do revisor, projeto do catálogo com orientações).
+- [x] Testes de integração: `UNIQUE (event_id, attempt)`; índice `analysis_attempts_one_per_edit`; `CHECK` de status e motivo; `route_decisions` com evidência vazia fora de `indeterminado` é recusada; proposta `INVALID` sem `validation_error` é recusada; `UNIQUE (topic, dedup_key)` da outbox; a view devolve as colunas que o issue-publisher lê; o runner é idempotente.
 
 ### Etapa 3 — Catálogo: schema, seed, conteúdo e leitura
 Requisitos: RF26, RF10, RNF13. Depende de: Etapa 2. Pré-condição: decisões D8 e D13 validadas.

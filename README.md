@@ -54,6 +54,12 @@ docker compose -f docker-compose.dev.yml up -d   # PostgreSQL e RabbitMQ locais
 uv run python -m issue_triage.main               # inicia o worker; Ctrl+C (SIGINT) ou SIGTERM encerra
 ```
 
+Antes de iniciar o worker, aplique as migrações do schema `triage` (idempotente; registra a versão em `triage.schema_migrations`):
+
+```bash
+uv run python -m issue_triage.migrate
+```
+
 O worker não expõe HTTP. Ao receber SIGTERM ou SIGINT, para de consumir, termina a mensagem em
 curso e fecha as conexões (logs `worker.started`, `worker.stop_requested` e `worker.stopped`).
 
