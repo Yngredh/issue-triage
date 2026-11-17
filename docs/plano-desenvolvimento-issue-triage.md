@@ -47,7 +47,7 @@ As seções "Contratos", "Modelo de dados" e "Catálogo" deste plano resumem o q
 
 ## Decisões técnicas da implementação
 
-Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 validadas pelo usuário em 2026-11-17 (D1 a D12 e D16 como estão; D13, D14, D15 e D17 com as observações registradas na própria linha); D18 proposta, aguarda validação.** D1 a D5 e D7 seguem o mesmo padrão do issue-analyst-api e do issue-publisher.
+Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 validadas pelo usuário em 2026-11-17 (D1 a D12 e D16 como estão; D13, D14, D15 e D17 com as observações registradas na própria linha); D19 validada pelo usuário em 2026-11-17; D18 proposta, aguarda validação.** D1 a D5 e D7 seguem o mesmo padrão do issue-analyst-api e do issue-publisher.
 
 | # | Ponto | Escolha proposta |
 |---|---|---|
@@ -69,6 +69,7 @@ Escolhas de implementação que os documentos não fecham. **Status: D1 a D17 va
 | D16 | Modelos e chave | `ANTHROPIC_API_KEY` (`SecretStr`, obrigatória no worker real, dispensada quando os fakes estão ativos nos testes), `ROUTER_MODEL`, `BUG_SPECIALIST_MODEL`, `IMPROVEMENT_SPECIALIST_MODEL` e `DOMAIN_SPECIALIST_MODEL`, todos com padrão `claude-haiku-5-5` |
 | D17 | Imagem do worker | **Validada pelo usuário em 2026-11-17:** seguir o Dockerfile do issue-publisher. Base `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`, como o issue-publisher, mais o que o Claude Agent SDK exigir para rodar o Claude Code como subprocesso (Node.js e o CLI, se a versão instalada do SDK não o trouxer embutido; verificar na Etapa 1). A pasta `catalog/source` é copiada para `/app/catalog/source` e lida por `CATALOG_SOURCE_DIR` |
 | D18 | Compose integrado | `docker-compose.yml` na raiz deste repositório (ADR-0001), com `postgres` (banco único `issue_maintenance`, initdb com `00_roles.sql`, `catalog/schema.sql` e `catalog/seed.sql`), `rabbitmq`, `issue-analyst-api` (`build: ../issue-analyst-api`), `issue-triage` e `issue-publisher` (`build: ../issue-publisher`). Cada serviço roda a própria migração antes de iniciar (`sh -c "python -m <pkg>.migrate && python -m <pkg>.main"`). `catalog/source` é montada somente leitura no `issue-triage` em desenvolvimento. O `docker-compose.dev.yml` deste repositório sobe só PostgreSQL e RabbitMQ para rodar o worker fora do container |
+| D19 | Escolhas do subagente na Etapa 4 | **Validada pelo usuário em 2026-11-17: seis aceitas como estão e uma corrigida.** 1) Reentrega de `author_edit` que já tem tentativa: `IN_PROGRESS` é retomada; `DONE` é descartada com `analysis.skipped_duplicate`. `analysis.edit_ignored` só aparece com o caso fora de `READY_TO_PUBLISH (empty_description)` ou quando o insert conflita. 2) `enrich` ou `reprocess` sem caso em `triage` → `analysis.discarded_invalid` com motivo `case_not_found`. 3) Versão da issue: vale o `issue.edited` de maior `received_at`; os enriquecimentos entram todos, em ordem de `created_at` e `id`, qualquer que seja o `trigger`. 4) `initial` sempre abre a tentativa 1, mesmo que a mensagem traga outro `attempt`. 6) Banco fora: fecha a conexão, a mensagem volta sem ack e o consumidor reconecta com espera de 1 s a 30 s, que volta a 1 s depois do próximo sucesso. 7) `Outcome` em `domain/messages.py` e `Worker` recebendo `services` para os testes. **Corrigida:** 5) descrição vazia = vazia ou só com espaços em branco de qualquer tipo (espaço, tab, quebra de linha), com `str.strip()` em Python ou `\s` em SQL, a mesma regra da entrada no issue-analyst-api; `btrim` sozinho só remove espaços. Corrigida no primeiro item da Etapa 5. Aceito também, até a Etapa 6: issue com descrição fica `IN_PROGRESS` e a mensagem volta para a fila sem pausa, porque ainda não há roteador |
 
 ## Contratos
 
@@ -91,7 +92,7 @@ Validada com Pydantic v2: `eventId` texto não vazio; `trigger` em `initial`, `a
    - Tentativa já `DONE` → ack, log `analysis.skipped_duplicate` (RF09, RNF04). Tentativa `IN_PROGRESS` → retoma (log `analysis.resumed`).
 4. Checagens sem IA (harness):
    - Repositório fora de `catalog.projects` → caso `NEEDS_REVIEW (unknown_repo)`, sem comentário e sem chamar a IA (RF10).
-   - Descrição atual vazia (`btrim = ''`, D14) → proposta `kind = missing_info` com o template de pedido de informações, `VALID`, caso `READY_TO_PUBLISH (empty_description)` e linha na `publish_outbox` (RF11, RF20).
+   - Descrição atual vazia (só espaços em branco de qualquer tipo, D14 e D19) → proposta `kind = missing_info` com o template de pedido de informações, `VALID`, caso `READY_TO_PUBLISH (empty_description)` e linha na `publish_outbox` (RF11, RF20).
 5. Roteador (Spec D): se já existe `route_decisions` da tentativa, reutiliza (retomada sem nova chamada, RNF04). Senão, chama, valida e grava (commit 2). `indeterminado` → `NEEDS_REVIEW (insufficient_content)` (RF18).
 6. Especialista da categoria (`bug` → bug, `melhoria` → melhoria, `duvida` → domínio), com as ferramentas e os limites da Issue Triage Spec (RF13, RF14, RF15, RNF11).
 7. Validador com uma segunda chance (Issue Triage Spec, seção 3, RF17). Aprovada → template de triagem (RF19), caso `READY_TO_PUBLISH (proposal_validated)` e linha na `publish_outbox`. Reprovada duas vezes ou limite estourado → proposta `INVALID`, caso `NEEDS_REVIEW (invalid_proposal)` (RF18).
@@ -493,7 +494,8 @@ Requisitos: RF09, RF10, RF11, RF20, RF28, RNF04. Depende de: Etapa 3. Pré-condi
 - [x] Testes de integração (RabbitMQ e PostgreSQL reais): mesma mensagem entregue duas vezes abre uma só tentativa; repositório fora do catálogo vira `NEEDS_REVIEW (unknown_repo)` (caso H04); descrição vazia ou só com espaços vira `READY_TO_PUBLISH (empty_description)` com `comment_body` contendo o marcador e o responsável, e uma linha na outbox (casos H05 e H06); edição do autor em `empty_description` abre `current_attempt + 1`; edição fora desse estado e reentrega da mesma edição são ignoradas; `enrich` incrementa `manual_attempts`; resultado de revisão com `manual_attempts` no limite vira `MAX_RETRIES_REACHED`; mensagem inválida e `eventId` inexistente são descartados.
 
 ### Etapa 5 — Relay da publish_outbox
-Requisitos: RF21, RNF05. Depende de: Etapa 4. Pré-condição: decisões D6 e D7 validadas.
+Requisitos: RF21, RNF05. Depende de: Etapa 4. Pré-condição: decisões D6, D7 e D19 validadas.
+- [ ] Correção da D19 (item 5) na Etapa 4: descrição vazia = vazia ou só com espaços em branco de qualquer tipo (`str.strip()` ou `\s`), não só `btrim`; testes com descrição só de quebras de linha e só de tabs gerando `missing_info` (RF20).
 - [ ] Declarar a fila `publish` durável e sem argumentos na subida (D6).
 - [ ] Relay da `triage.publish_outbox` (D7): lê linhas pendentes com `FOR UPDATE SKIP LOCKED`, publica com confirmação do broker e marca `published_at` na mesma transação; reconecta com backoff.
 - [ ] Testes de integração: a mensagem do caso H05 chega à fila `publish` no formato `{"proposalId", "revision"}`; broker parado deixa a linha pendente e ela sai quando o broker volta; duas instâncias do relay não publicam a mesma linha duas vezes (o consumidor idempotente do publisher cobre o que escapar).
