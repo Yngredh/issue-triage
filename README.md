@@ -63,13 +63,94 @@ uv run python -m issue_triage.migrate
 O worker não expõe HTTP. Ao receber SIGTERM ou SIGINT, para de consumir, termina a mensagem em
 curso e fecha as conexões (logs `worker.started`, `worker.stop_requested` e `worker.stopped`).
 
+## Ambiente integrado
+
+`docker-compose.yml` sobe, num banco único (`issue_maintenance`), o PostgreSQL 16, o RabbitMQ, o
+issue-analyst-api, o issue-triage e o issue-publisher. Os repositórios `../issue-analyst-api` e
+`../issue-publisher` precisam estar ao lado deste. Somente para uso local.
+
+```bash
+cp .env.example .env     # preencha ANTHROPIC_API_KEY, GITHUB_TOKEN e GITHUB_WEBHOOK_SECRET
+docker compose config    # valida o compose
+docker compose up -d --build
+docker compose logs -f issue-triage
+docker compose down      # use -v para apagar os dados (o initdb roda de novo na próxima subida)
+```
+
+- O initdb roda, nesta ordem: `infra/initdb/00_roles.sql` (papéis `analyst_api`, `triage_svc` e
+  `publisher_svc`, schemas com dono, `GRANT CREATE ON DATABASE` no banco atual e privilégios
+  padrão; senha igual ao nome do papel, só uso local), `catalog/schema.sql`, `catalog/seed.sql` e
+  `infra/initdb/03_catalog_grants.sql` (`SELECT` do `catalog` para o issue-triage e o issue-publisher).
+- Cada serviço roda a própria migração (`python -m <pacote>.migrate`) com o papel dele antes de
+  iniciar. O issue-analyst-api sobe e migra primeiro (cria `inbound`); os outros dois esperam o
+  `/health` dele. A migração `0002` deste repositório dá `SELECT` da view
+  `triage.publishable_proposals` ao `publisher_svc` (só se o papel existir).
+- Portas do host (configuráveis no `.env`, sem colidir com os containers `mechanical-hub-*`):
+  PostgreSQL `5433` (`POSTGRES_PORT`), RabbitMQ `5673` e `15673` (`RABBITMQ_PORT` e
+  `RABBITMQ_MANAGEMENT_PORT`), issue-analyst-api `8081` (`ANALYST_API_PORT`).
+- Sem `ANTHROPIC_API_KEY` o worker registra `worker.missing_api_key` e sai com código 1.
+- `catalog/source` é montada somente leitura no `issue-triage`.
+
+### Aplicar a seed de novo
+
+A seed é reexecutável (upsert dos projetos e troca das orientações). Depois de editar
+`catalog/seed.sql`, aplique-a sem recriar o banco:
+
+```bash
+psql postgresql://postgres:postgres@localhost:5433/issue_maintenance -f catalog/seed.sql
+```
+
+(No compose de desenvolvimento, `postgresql://postgres:postgres@localhost:5432/issue_triage`, depois
+de aplicar `catalog/schema.sql` uma vez.) As permissões do `catalog` não mudam.
+
+### Enviar uma análise de teste
+
+```bash
+uv run python scripts/send_analysis.py --from-case R01
+uv run python scripts/send_analysis.py --repository Yaane-h/mechanical-hub-orders \
+    --title "Erro ao abrir ordem" --description "POST /orders devolve 500" [--issue-number N] [--event-id ID]
+```
+
+Grava um `issue.created` em `inbound.issue_events` (`event_id = dev-<uuid>`) e publica a mensagem na
+fila `analysis`. Usa `DATABASE_URL` e `RABBITMQ_URL` do ambiente ou do `.env` (em desenvolvimento, o
+usuário `postgres` e as portas do host). Sem `--issue-number`, usa o horário atual em segundos.
+
 ## Testes
 
 ```bash
 uv run ruff check . && uv run pytest -q
 ```
 
-Nenhum teste chama a Anthropic de verdade.
+Precisa do Docker ativo. Nenhum teste chama a Anthropic de verdade nem o GitHub (RNF17). O que é real
+e o que é simulado:
+
+| Testes | Real | Simulado |
+|---|---|---|
+| `tests/unit` | validações, prompts, validador, ferramentas do catálogo (leitura de `catalog/source`) | roteador (`FakeRouterLLM`), especialista (`FakeSpecialistRunner`) e cliente do SDK; sem rede |
+| `tests/integration` (análise, roteador, especialistas, falhas técnicas, encerramento, logs, publicação, outbox) | PostgreSQL 16 e RabbitMQ 3 do testcontainers, migrações, catálogo (DDL e seed) | IA (portas falsas); `inbound` é um stub de teste; o issue-publisher e o GitHub não participam |
+| `test_publisher_grant.py` | PostgreSQL 16 próprio por teste, `00_roles.sql` e a migração `0002` com papéis de verdade | tudo o mais |
+| `test_send_analysis.py` | PostgreSQL e RabbitMQ do testcontainers e o script | IA |
+| `test_evaluate_script.py` e `test_issues_fixture.py` | leitura de `issues.yaml` e `catalog/seed.sql`, critérios de acerto | roteador e especialista falsos |
+
+## Avaliação com a API real
+
+```bash
+uv run python scripts/evaluate.py --dry-run                 # lista os casos, sem API, banco nem chave
+uv run python scripts/evaluate.py --price-in 1 --price-out 5   # roteador (USD por milhão de tokens)
+uv run python scripts/evaluate.py --specialists --json saida.json
+uv run python scripts/evaluate.py --only R01,H02
+```
+
+Roda da raiz do repositório, no ambiente de desenvolvimento, e chama a API real da Anthropic (tem
+custo): exige `ANTHROPIC_API_KEY` e `DATABASE_URL` (catálogo já com a seed). Não roda no `pytest`.
+O roteador roda nos casos ativos de `tests/routing/fixtures/issues.yaml` com `stage = router`; H04 a
+H06 e o R12 saem como `pytest`. Acerta se a categoria bate, a evidência é literal na issue e, quando o
+caso lista `evidence`, ela coincide com alguma (substring, sem diferenciar maiúsculas e espaços).
+Motivos de erro: `category_mismatch`, `evidence_not_literal`, `evidence_off_target` e `router_error`.
+Com `--specialists`, E01 a E04 e I05 passam pelo especialista e pelo validador (acerta se a proposta é
+`VALID` e, em I05, sem `@atacante`) e o texto esperado é impresso para julgamento humano. A saída traz
+tabela por caso, totais por grupo, `llm_calls` e o custo do roteador (só tokens sem `--price-in` e
+`--price-out`).
 
 ## Imagem
 

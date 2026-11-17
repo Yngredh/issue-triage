@@ -242,9 +242,13 @@ async def test_broker_down_keeps_rows_pending_until_it_returns(
             first = _insert_outbox(database_url, 1)
             await _wait_until(lambda: _published(database_url, first) == set(first))
 
-            await asyncio.to_thread(broker.get_wrapped_container().stop)
-            pending = _insert_outbox(database_url, 3)
-            await asyncio.sleep(2)
+            with structlog.testing.capture_logs() as logs:
+                await asyncio.to_thread(broker.get_wrapped_container().stop)
+                pending = _insert_outbox(database_url, 3)
+                # Espera a condição: o relay já tentou publicar e falhou com o broker parado.
+                await _wait_until(
+                    lambda: any(e["event"] == "outbox.publish_failed" for e in logs), 60
+                )
             assert _published(database_url, pending) == set()
 
             await asyncio.to_thread(broker.get_wrapped_container().start)

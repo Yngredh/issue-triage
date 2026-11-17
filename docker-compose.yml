@@ -1,0 +1,95 @@
+# Ambiente integrado (D18, D32): PostgreSQL (banco único `issue_maintenance`), RabbitMQ,
+# issue-analyst-api, issue-triage e issue-publisher. Somente para uso local.
+# Os repositórios irmãos ../issue-analyst-api e ../issue-publisher precisam estar ao lado deste.
+# Portas do host por `.env` (padrões que não colidem com os containers mechanical-hub-*).
+# Cada serviço migra o próprio schema, com o papel dele, antes de iniciar (D32). O issue-analyst-api
+# sobe e migra primeiro (cria `inbound`, que o issue-triage lê); os outros dois esperam por ele (P2).
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: issue_maintenance
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # O initdb roda os arquivos em ordem alfabética, só na criação do volume.
+      - ./infra/initdb/00_roles.sql:/docker-entrypoint-initdb.d/00_roles.sql:ro
+      - ./catalog/schema.sql:/docker-entrypoint-initdb.d/01_catalog_schema.sql:ro
+      - ./catalog/seed.sql:/docker-entrypoint-initdb.d/02_catalog_seed.sql:ro
+      - ./infra/initdb/03_catalog_grants.sql:/docker-entrypoint-initdb.d/03_catalog_grants.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d issue_maintenance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "${RABBITMQ_PORT:-5673}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  issue-analyst-api:
+    build: ../issue-analyst-api
+    command: ["sh", "-c", "python -m issue_analyst_api.migrate && python -m issue_analyst_api.main"]
+    environment:
+      DATABASE_URL: postgresql://analyst_api:analyst_api@postgres:5432/issue_maintenance
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      HTTP_PORT: "8000"
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+    ports:
+      - "${ANALYST_API_PORT:-8081}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      # `/health` só responde depois da migração, que roda antes do servidor.
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  issue-triage:
+    build: .
+    command: ["sh", "-c", "python -m issue_triage.migrate && python -m issue_triage.main"]
+    environment:
+      DATABASE_URL: postgresql://triage_svc:triage_svc@postgres:5432/issue_maintenance
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./catalog/source:/app/catalog/source:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      issue-analyst-api:
+        condition: service_healthy
+
+  issue-publisher:
+    build: ../issue-publisher
+    command: ["sh", "-c", "python -m issue_publisher.migrate && python -m issue_publisher.main"]
+    environment:
+      DATABASE_URL: postgresql://publisher_svc:publisher_svc@postgres:5432/issue_maintenance
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      issue-analyst-api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
