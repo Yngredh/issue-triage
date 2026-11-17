@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 INBOUND_STUB = ROOT / "tests" / "fixtures" / "sql" / "inbound_stub.sql"
 # DDL do schema `catalog` (D8); nos testes as fixtures aplicam o arquivo.
 CATALOG_SCHEMA = ROOT / "catalog" / "schema.sql"
+# Seed do catálogo (D8), aplicada depois do DDL, como no initdb.
+CATALOG_SEED = ROOT / "catalog" / "seed.sql"
 
 
 @pytest.fixture(scope="session")
@@ -36,11 +38,12 @@ def postgres_container() -> Iterator[PostgresContainer]:
 
 @pytest.fixture(scope="session")
 def database_url(postgres_container: PostgresContainer) -> str:
-    """URL do PostgreSQL da sessão com o stub de `inbound`, `catalog/schema.sql` e as migrações."""
+    """URL do PostgreSQL da sessão com o stub de `inbound`, catálogo (DDL e seed) e migrações."""
     url = postgres_container.get_connection_url()
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(INBOUND_STUB.read_text(encoding="utf-8"))
         conn.execute(CATALOG_SCHEMA.read_text(encoding="utf-8"))
+        conn.execute(CATALOG_SEED.read_text(encoding="utf-8"))
     apply_migrations(url)
     return url
 

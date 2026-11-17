@@ -426,11 +426,11 @@ Requisitos: RNF07, RNF04. Depende de: Etapa 1. Pré-condição: decisões D2 e D
 
 ### Etapa 3 — Catálogo: schema, seed, conteúdo e leitura
 Requisitos: RF26, RF10, RNF13. Depende de: Etapa 2. Pré-condição: decisões D8 e D13 validadas.
-- [ ] Criar `catalog/schema.sql` com o DDL de "Modelo de dados > Schema `catalog`".
-- [ ] Criar `catalog/seed.sql` com o registro e as orientações da seção "Catálogo", reexecutável (D8).
-- [ ] Copiar para `catalog/source/<repositório>` os arquivos da tabela "Base de conhecimento", a partir de `../../MechanicalHub/`, sem alterar o conteúdo.
-- [ ] Repositório de leitura do catálogo em `adapters/`: projeto por `repository` e orientações do repositório.
-- [ ] Testes de integração: a seed roda duas vezes seguidas sem erro e sem duplicar orientações; repositório fora do catálogo não é encontrado; cada pasta de `catalog/source` tem pelo menos a spec do serviço; os quatro repositórios do registro têm pasta.
+- [x] Criar `catalog/schema.sql` com o DDL de "Modelo de dados > Schema `catalog`".
+- [x] Criar `catalog/seed.sql` com o registro e as orientações da seção "Catálogo", reexecutável (D8).
+- [x] Copiar para `catalog/source/<repositório>` os arquivos da tabela "Base de conhecimento", a partir de `../../MechanicalHub/`, sem alterar o conteúdo.
+- [x] Repositório de leitura do catálogo em `adapters/`: projeto por `repository` e orientações do repositório.
+- [x] Testes de integração: a seed roda duas vezes seguidas sem erro e sem duplicar orientações; repositório fora do catálogo não é encontrado; cada pasta de `catalog/source` tem pelo menos a spec do serviço; os quatro repositórios do registro têm pasta.
 
 ### Etapa 4 — Consumo da fila analysis e ciclo da tentativa (sem IA)
 Requisitos: RF09, RF10, RF11, RF20, RF28, RNF04. Depende de: Etapa 3. Pré-condição: decisões D3, D6, D14 e D15 validadas.
