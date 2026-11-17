@@ -447,7 +447,7 @@ async def test_invalid_message_and_unknown_event_are_discarded(
     discarded = [entry for entry in logs if entry["event"] == "analysis.discarded_invalid"]
     assert [entry["reason"] for entry in discarded] == [
         "invalid_schema",
-        "invalid_schema",
+        "origin_not_found",
         "origin_not_found",
     ]
 

@@ -2,7 +2,7 @@
 
 from psycopg import AsyncConnection
 
-from issue_triage.domain.issue import IssueText, OriginEvent, is_blank
+from issue_triage.domain.issue import CloseReview, IssueText, OriginEvent, is_blank
 
 
 async def find_origin_event(conn: AsyncConnection, event_id: str) -> OriginEvent | None:
@@ -50,3 +50,24 @@ async def read_issue_text(conn: AsyncConnection, origin: OriginEvent) -> IssueTe
         description_empty=is_blank(description),
         enrichments=enrichments,
     )
+
+
+async def find_close_review(
+    conn: AsyncConnection, review_ref: str, event_id: str
+) -> CloseReview | None:
+    """Linha de `issue_review_history` de um `close` do caso, ou `None` (RF29, P1).
+
+    `review_ref` é o `triggerRef` da mensagem. Devolve `None` se o id não for numérico, se a
+    linha não existir, se não for um `close` ou se pertencer a outro evento.
+    """
+    if not review_ref.isascii() or not review_ref.isdigit():
+        return None
+    cur = await conn.execute(
+        "SELECT id, final_status FROM inbound.issue_review_history "
+        "WHERE id = %s AND action = 'close' AND origin_event_id = %s",
+        (int(review_ref), event_id),
+    )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    return CloseReview(review_id=row[0], final_status=row[1])

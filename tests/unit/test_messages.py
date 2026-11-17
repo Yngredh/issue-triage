@@ -12,6 +12,7 @@ VALID = [
     {"eventId": "evt-001", "attempt": None, "trigger": "author_edit", "triggerRef": "dlv-9"},
     {"eventId": "evt-001", "attempt": 3, "trigger": "enrich", "triggerRef": "17"},
     {"eventId": "evt-001", "attempt": 3, "trigger": "reprocess", "triggerRef": "18"},
+    {"eventId": "evt-001", "attempt": None, "trigger": "close", "triggerRef": "19"},
 ]
 
 
@@ -35,7 +36,10 @@ INVALID = [
     {"eventId": "evt-001", "attempt": None, "trigger": "author_edit", "triggerRef": None},
     {"eventId": "evt-001", "attempt": 3, "trigger": "enrich", "triggerRef": None},
     {"eventId": "evt-001", "attempt": 3, "trigger": "reprocess", "triggerRef": ""},
-    {"eventId": "evt-001", "attempt": None, "trigger": "close", "triggerRef": "19"},
+    {"eventId": "evt-001", "attempt": 3, "trigger": "close", "triggerRef": "19"},
+    {"eventId": "evt-001", "attempt": None, "trigger": "close", "triggerRef": None},
+    {"eventId": "evt-001", "attempt": None, "trigger": "close", "triggerRef": ""},
+    {"eventId": "evt-001", "attempt": None, "trigger": "purge", "triggerRef": "19"},
     {"eventId": "evt-001", "attempt": 1, "trigger": "initial", "triggerRef": None, "x": 1},
     {"eventId": "evt-001", "trigger": "initial", "triggerRef": None},
     {"attempt": 1, "trigger": "initial", "triggerRef": None},

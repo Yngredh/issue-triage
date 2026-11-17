@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from issue_triage.adapters import triage_store
 from issue_triage.adapters.catalog import find_project, list_guidelines
 from issue_triage.adapters.catalog_tools import docs_dir
-from issue_triage.adapters.inbound import find_origin_event, read_issue_text
+from issue_triage.adapters.inbound import find_close_review, find_origin_event, read_issue_text
 from issue_triage.adapters.provider_errors import TechnicalFailure, classify
 from issue_triage.domain.catalog import Project
 from issue_triage.domain.issue import OriginEvent
@@ -97,6 +97,8 @@ class AnalysisProcessor:
                     log.warning("analysis.discarded_invalid", reason="origin_not_found")
                     return Outcome.ACK
                 log = log.bind(repository=origin.repository, issue_number=origin.issue_number)
+                if message.trigger == "close":
+                    return await self._close(conn, message, origin, log)
                 opened = await self._open(conn, message, origin)
 
             if opened is None:
@@ -412,3 +414,32 @@ class AnalysisProcessor:
             log.info("analysis.skipped_duplicate")
         elif finished.applied:
             log.info(event, status=finished.outcome, status_reason=finished.status_reason)
+
+    @staticmethod
+    async def _close(
+        conn: AsyncConnection, message: AnalysisMessage, origin: OriginEvent, log: Any
+    ) -> Outcome:
+        """`close` (RF29, P1): passo 3 de "Processamento"; não abre tentativa nem chama a IA.
+
+        Roda dentro da transação do commit 1. A linha de review precisa existir, ser um `close`
+        e ser do mesmo evento (`review_not_found`); caso inexistente é `case_not_found`.
+        """
+        assert message.trigger_ref is not None
+        review = await find_close_review(conn, message.trigger_ref, origin.event_id)
+        if review is None:
+            log.warning("analysis.discarded_invalid", reason="review_not_found")
+            return Outcome.ACK
+        closed = await triage_store.close_case(conn, event_id=origin.event_id, review=review)
+        if closed is None:
+            log.warning("analysis.discarded_invalid", reason="case_not_found")
+        elif closed.event == "triage.case_closed":
+            log.info(
+                closed.event,
+                status=closed.status,
+                status_reason=closed.status_reason,
+                from_status=closed.from_status,
+                review_id=review.review_id,
+            )
+        else:
+            log.info(closed.event, trigger="close", review_id=review.review_id)
+        return Outcome.ACK

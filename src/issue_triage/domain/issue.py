@@ -35,3 +35,11 @@ def is_blank(text: str) -> bool:
     vazio, a mesma regra da entrada no issue-analyst-api; `btrim` sozinho só remove espaços.
     """
     return not text.strip()
+
+
+@dataclass(frozen=True)
+class CloseReview:
+    """Resolução `close` do revisor, em `inbound.issue_review_history` (RF29, P1)."""
+
+    review_id: int
+    final_status: str  # CANCELLED ou FINISHED

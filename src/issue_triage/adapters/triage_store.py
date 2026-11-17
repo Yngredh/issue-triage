@@ -10,6 +10,7 @@ from typing import Any
 from psycopg import AsyncConnection
 from psycopg.types.json import Jsonb
 
+from issue_triage.domain.issue import CloseReview
 from issue_triage.domain.router import RouteDecision
 from issue_triage.domain.specialist_flow import PreviousProposal
 
@@ -46,6 +47,16 @@ class FinishedAttempt:
     def applied(self) -> bool:
         """`True` se o caso recebeu o status desta tentativa."""
         return self.status_reason is not None
+
+
+@dataclass(frozen=True)
+class Closed:
+    """Resultado do `close`: o log que o descreve; `triage.case_closed` leva o novo status."""
+
+    event: str
+    status: str | None = None
+    status_reason: str | None = None
+    from_status: str | None = None
 
 
 @dataclass(frozen=True)
@@ -360,9 +371,7 @@ class StoredRouteDecision:
     llm_calls: int
 
 
-async def find_route_decision(
-    conn: AsyncConnection, attempt_id: int
-) -> StoredRouteDecision | None:
+async def find_route_decision(conn: AsyncConnection, attempt_id: int) -> StoredRouteDecision | None:
     """Decisão já gravada da tentativa, reutilizada na retomada sem nova chamada (RNF04)."""
     cur = await conn.execute(
         "SELECT category, reason, evidence, llm_calls FROM triage.route_decisions "
@@ -413,3 +422,39 @@ async def save_route_decision(
         (decision.category, opened.case_id),
     )
     return StoredRouteDecision(decision=decision, llm_calls=llm_calls)
+
+
+async def close_case(conn: AsyncConnection, *, event_id: str, review: CloseReview) -> Closed | None:
+    """`close` (RF29, P1): encerra o caso com o `final_status` do review, sem abrir tentativa.
+
+    O caso é lido com `FOR UPDATE`. `NEEDS_REVIEW`, `MAX_RETRIES_REACHED` e `READY_TO_PUBLISH`
+    passam a `CANCELLED` ou `FINISHED` com `closed_by_reviewer` e `closed_by_review_id`. Já
+    encerrado com o mesmo review é duplicata; `ANALYZING` ou encerrado por outro review é
+    ignorado. Devolve `None` se o caso não existir.
+    """
+    case = await _lock_case(conn, event_id)
+    if case is None:
+        return None
+    case_id, status, _status_reason, _current_attempt = case
+
+    if status in ("CANCELLED", "FINISHED"):
+        cur = await conn.execute(
+            "SELECT closed_by_review_id FROM triage.issue_cases WHERE id = %s", (case_id,)
+        )
+        if (await cur.fetchone())[0] == review.review_id:
+            return Closed(event="analysis.skipped_duplicate")
+        return Closed(event="analysis.close_ignored")
+    if status == "ANALYZING":
+        return Closed(event="analysis.close_ignored")
+
+    await conn.execute(
+        "UPDATE triage.issue_cases SET status = %s, status_reason = 'closed_by_reviewer', "
+        "closed_by_review_id = %s, updated_at = now() WHERE id = %s",
+        (review.final_status, review.review_id, case_id),
+    )
+    return Closed(
+        event="triage.case_closed",
+        status=review.final_status,
+        status_reason="closed_by_reviewer",
+        from_status=status,
+    )

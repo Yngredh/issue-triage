@@ -735,9 +735,9 @@ Requisitos: RNF08. Depende de: Etapa 9.
 
 ### Etapa 11 — Resolução manual: encerramento
 Requisitos: RF29. Depende de: Etapa 4. Pré-condição: P1 decidido (resolvido em 2026-11-17).
-- [ ] Estender o modelo Pydantic da mensagem `analysis` com `trigger = close` (`attempt` nulo, `triggerRef` obrigatório com o id numérico do review, sem campos extras), sem mudar `analysis_attempts.trigger`.
-- [ ] Aplicar o `close` conforme "Processamento de uma mensagem", passo 3: ler a linha de `inbound.issue_review_history`, passar o caso a `CANCELLED` ou `FINISHED` com `closed_by_reviewer` e `closed_by_review_id`, de forma idempotente (log `triage.case_closed`); `analysis.skipped_duplicate`, `analysis.close_ignored` e `analysis.discarded_invalid` (`review_not_found`, `case_not_found`) nos casos descritos.
-- [ ] Testes de integração (a linha de review é inserida no stub de `inbound`, D9, e a mensagem é publicada direto): encerramento de caso em `NEEDS_REVIEW`, em `MAX_RETRIES_REACHED` e em `READY_TO_PUBLISH` (falha de publicação), com `CANCELLED` e `FINISHED`; mensagem repetida não muda nada; caso em `ANALYZING` e caso já encerrado por outro review são ignorados; review inexistente ou de outro evento é descartado; o `close` não cria tentativa nem chama roteador ou especialista.
+- [x] Estender o modelo Pydantic da mensagem `analysis` com `trigger = close` (`attempt` nulo, `triggerRef` obrigatório com o id numérico do review, sem campos extras), sem mudar `analysis_attempts.trigger`.
+- [x] Aplicar o `close` conforme "Processamento de uma mensagem", passo 3: ler a linha de `inbound.issue_review_history`, passar o caso a `CANCELLED` ou `FINISHED` com `closed_by_reviewer` e `closed_by_review_id`, de forma idempotente (log `triage.case_closed`); `analysis.skipped_duplicate`, `analysis.close_ignored` e `analysis.discarded_invalid` (`review_not_found`, `case_not_found`) nos casos descritos.
+- [x] Testes de integração (a linha de review é inserida no stub de `inbound`, D9, e a mensagem é publicada direto): encerramento de caso em `NEEDS_REVIEW`, em `MAX_RETRIES_REACHED` e em `READY_TO_PUBLISH` (falha de publicação), com `CANCELLED` e `FINISHED`; mensagem repetida não muda nada; caso em `ANALYZING` e caso já encerrado por outro review são ignorados; review inexistente ou de outro evento é descartado; o `close` não cria tentativa nem chama roteador ou especialista.
 
 ### Etapa 12 — Observabilidade
 Requisitos: RNF14. Depende de: Etapa 10.

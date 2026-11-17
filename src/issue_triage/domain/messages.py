@@ -1,6 +1,7 @@
 """Mensagem da fila `analysis`, produzida pelo issue-analyst-api ("Contratos").
 
-O `close` (resolução manual de encerramento) fica de fora até a decisão do P1 (Etapa 11).
+O `close` (resolução manual de encerramento, P1) não abre tentativa: `triggerRef` é o id da
+linha de `inbound.issue_review_history`.
 """
 
 from enum import StrEnum
@@ -8,9 +9,9 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
-Trigger = Literal["initial", "author_edit", "enrich", "reprocess"]
+Trigger = Literal["initial", "author_edit", "enrich", "reprocess", "close"]
 
-TRIGGERS_WITH_REF = frozenset({"author_edit", "enrich", "reprocess"})
+TRIGGERS_WITH_REF = frozenset({"author_edit", "enrich", "reprocess", "close"})
 
 
 class Outcome(StrEnum):
@@ -32,10 +33,10 @@ class AnalysisMessage(BaseModel):
 
     @model_validator(mode="after")
     def _check_trigger_fields(self) -> Self:
-        """`attempt` é nulo só em `author_edit`; `triggerRef` é obrigatório fora do `initial`."""
-        if self.trigger == "author_edit":
+        """`attempt` nulo em `author_edit` e `close`; `triggerRef` obrigatório fora do `initial`."""
+        if self.trigger in ("author_edit", "close"):
             if self.attempt is not None:
-                raise ValueError("attempt must be null for author_edit")
+                raise ValueError(f"attempt must be null for {self.trigger}")
         elif self.attempt is None:
             raise ValueError("attempt is required")
         if self.trigger in TRIGGERS_WITH_REF and not self.trigger_ref:
