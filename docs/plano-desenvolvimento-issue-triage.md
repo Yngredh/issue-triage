@@ -717,8 +717,8 @@ Requisitos: RF13, RF14, RF16, RF17, RF18, RF31, RNF09. Depende de: Etapas 6 e 7.
 
 ### Etapa 9 — Saída para publicação de ponta a ponta
 Requisitos: RF19, RF21, RNF09, RNF10. Depende de: Etapas 5 e 8. (O template, a limpeza e a gravação da proposta aprovada passaram para a Etapa 8 pela D24.)
-- [ ] Correções da D26 (Etapa 8): a) a limpeza só trata como `@menção` o `@` que não vem colado em letra, número, `.`, `_` ou `-` (teste com `a@b.com`); b) confirmar com teste que a limpeza roda em cada campo do modelo antes do template e que o marcador `<!-- triage:... -->` sobrevive; c) `quote` vazia após normalizar é `ungrounded_claim` nas checagens 3 e 4 (teste com `quote` só de espaços).
-- [ ] Testes de integração de ponta a ponta com os fakes e RabbitMQ real: bug, melhoria e dúvida chegam à fila `publish` (casos E01 a E04); o corpo tem exatamente um marcador e o responsável `@Yaane-h`; texto do modelo com `<!-- triage:x:9 -->` não gera segundo marcador; mensagem repetida não gera segunda proposta.
+- [x] Correções da D26 (Etapa 8): a) a limpeza só trata como `@menção` o `@` que não vem colado em letra, número, `.`, `_` ou `-` (teste com `a@b.com`); b) confirmar com teste que a limpeza roda em cada campo do modelo antes do template e que o marcador `<!-- triage:... -->` sobrevive; c) `quote` vazia após normalizar é `ungrounded_claim` nas checagens 3 e 4 (teste com `quote` só de espaços).
+- [x] Testes de integração de ponta a ponta com os fakes e RabbitMQ real: bug, melhoria e dúvida chegam à fila `publish` (casos E01 a E04); o corpo tem exatamente um marcador e o responsável `@Yaane-h`; texto do modelo com `<!-- triage:x:9 -->` não gera segundo marcador; mensagem repetida não gera segunda proposta.
 
 ### Etapa 10 — Falhas técnicas
 Requisitos: RNF08. Depende de: Etapa 9.

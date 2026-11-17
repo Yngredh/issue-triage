@@ -131,6 +131,8 @@ def check_schema(raw: Any, specialist: SpecialistName) -> SpecialistOutput | Rej
 
 def _contains(haystacks: Sequence[str], needle: str) -> bool:
     target = normalize_match(needle)
+    if not target:  # quote só de espaços não ancora nada (D26)
+        return False
     return any(target in normalize_match(text) for text in haystacks)
 
 

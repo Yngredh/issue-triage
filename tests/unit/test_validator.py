@@ -314,3 +314,25 @@ def test_checks_stop_at_the_first_failure(folder: Path) -> None:
     output = _output(category="melhoria", summary=f"Token {TOKEN}")
 
     assert _code(validate(output, ctx=_ctx(folder), tool_calls=[])) == "category_mismatch"
+
+
+# D26: quote vazia depois de normalizar
+
+
+@pytest.mark.parametrize("quote", [" ", "   \n\t "], ids=["spaces", "whitespace"])
+@pytest.mark.parametrize("ref", ["title", "description"])
+def test_blank_issue_quote_is_ungrounded(folder: Path, ref: str, quote: str) -> None:
+    output = _output(evidence=[{"source": "issue", "ref": ref, "quote": quote}, CATALOG_EVIDENCE])
+
+    result = validate(output, ctx=_ctx(folder), tool_calls=_read(folder))
+
+    assert _code(result) == "ungrounded_claim"
+
+
+@pytest.mark.parametrize("quote", [" ", "   \n\t "], ids=["spaces", "whitespace"])
+def test_blank_catalog_quote_is_ungrounded(folder: Path, quote: str) -> None:
+    evidence = [ISSUE_EVIDENCE, {"source": "catalog", "ref": DOC, "quote": quote}]
+
+    result = validate(_output(evidence=evidence), ctx=_ctx(folder), tool_calls=_read(folder))
+
+    assert _code(result) == "ungrounded_claim"

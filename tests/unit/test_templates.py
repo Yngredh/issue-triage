@@ -149,3 +149,34 @@ def test_clean_text_repeats_until_stable_and_cuts() -> None:
     assert "<!--" not in clean_text("<<b>!-- x", responsible="@Yaane-h")
     assert clean_text("a" * 600, responsible="@Yaane-h", max_chars=500) == "a" * 500
     assert clean_text("x < 5 e y > 3", responsible="@Yaane-h") == "x < 5 e y > 3"
+
+
+def test_clean_text_keeps_emails_and_removes_third_party_mentions() -> None:
+    # D26: o `@` colado em letra, número, `.`, `_` ou `-` não é menção.
+    kept = "Escreva para a@b.com, x_1@y.org ou ana.silva@empresa.com.br."
+
+    assert clean_text(kept, responsible="@Yaane-h") == kept
+    assert clean_text("oi @fulano, (@fulano) e @yaane-h", responsible="@Yaane-h") == (
+        "oi , () e @yaane-h"
+    )
+    assert clean_text("a@b.com @fulano", responsible="@Yaane-h") == "a@b.com "
+
+
+def test_marker_survives_because_the_cleaning_runs_per_field_before_the_template() -> None:
+    body = _render(
+        _output(
+            summary="<!-- triage:x:9 -->",
+            next_step="--> <!--",
+            conclusion="nao_procede",
+            conclusion_reason="<!-- triage:y:1 -->",
+            evidence=[{"source": "issue", "ref": "title", "quote": "<!-- triage:z:2 -->"}],
+        )
+    )
+
+    assert body.count("<!--") == 1
+    assert body.count("-->") == 1
+    assert body.count("<!-- triage:") == 1
+    assert body.endswith("<!-- triage:evt-1:3 -->")
+    # Limpar o corpo pronto apagaria o marcador do template.
+    assert clean_text(body, responsible="@Yaane-h").count("triage:evt-1:3") == 1
+    assert "<!--" not in clean_text(body, responsible="@Yaane-h")

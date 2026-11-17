@@ -70,7 +70,8 @@ MAX_ANSWER = 1000
 MAX_QUOTE = 300
 
 _HTML_TAG = re.compile(r"</?[A-Za-z][^<>]*>")
-_MENTION = re.compile(r"@[\w-]+")
+# O `@` colado em letra, número, `.`, `_` ou `-` (como em e-mail) não é menção (D26).
+_MENTION = re.compile(r"(?<![\w.-])@[\w-]+")
 
 
 def render_missing_info(*, project: str, responsible: str, event_id: str, revision: int) -> str:
