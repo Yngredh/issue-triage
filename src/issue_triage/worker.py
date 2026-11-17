@@ -8,6 +8,7 @@ import structlog
 
 from issue_triage.adapters.analysis_consumer import AnalysisConsumer
 from issue_triage.adapters.database import close_pool, create_pool, open_pool
+from issue_triage.adapters.outbox_relay import OutboxRelay
 from issue_triage.analysis import AnalysisProcessor
 from issue_triage.config import Settings
 
@@ -31,10 +32,11 @@ ServicesFactory = Callable[[Settings], AbstractAsyncContextManager[None]]
 
 
 @asynccontextmanager
-async def analysis_services(settings: Settings) -> AsyncIterator[None]:
-    """Pool do banco e consumidor da fila `analysis` (Etapa 4), ativos enquanto o bloco dura.
+async def worker_services(settings: Settings) -> AsyncIterator[None]:
+    """Pool do banco, consumidor da fila `analysis` e relay da `publish_outbox` (D4).
 
-    Na saída o consumidor para de consumir e termina a mensagem em curso antes de o pool fechar.
+    Ativos enquanto o bloco dura. Na saída o consumidor para de consumir e termina a mensagem em
+    curso, o relay para (um lote em curso é desfeito e fica pendente) e só então o pool fecha.
     """
     pool = create_pool(settings.DATABASE_URL)
     await open_pool(pool)
@@ -42,11 +44,19 @@ async def analysis_services(settings: Settings) -> AsyncIterator[None]:
     consumer = AnalysisConsumer(
         processor.process, settings.RABBITMQ_URL, prefetch=settings.ANALYSIS_PREFETCH
     )
+    relay = OutboxRelay(
+        pool,
+        settings.RABBITMQ_URL,
+        poll_interval_s=settings.RELAY_POLL_INTERVAL_S,
+        batch_size=settings.RELAY_BATCH_SIZE,
+    )
     consumer.start()
+    relay.start()
     try:
         yield
     finally:
         await consumer.stop()
+        await relay.stop()
         await close_pool(pool)
 
 
@@ -59,7 +69,7 @@ class Worker:
     conexões.
     """
 
-    def __init__(self, settings: Settings, services: ServicesFactory = analysis_services) -> None:
+    def __init__(self, settings: Settings, services: ServicesFactory = worker_services) -> None:
         self._settings = settings
         self._services = services
         self._stop = asyncio.Event()

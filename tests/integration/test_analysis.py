@@ -202,7 +202,11 @@ async def test_unknown_repository_needs_review_without_comment(
     assert "triage.unknown_repo" in [entry["event"] for entry in logs]
 
 
-@pytest.mark.parametrize("description", ["", "   "], ids=["H05-empty", "H06-spaces"])
+@pytest.mark.parametrize(
+    "description",
+    ["", "   ", "\n\r\n\n", "\t\t", " \t\r\n "],
+    ids=["H05-empty", "H06-spaces", "H06-newlines", "H06-tabs", "H06-mixed"],
+)
 async def test_empty_description_gets_missing_info_comment(
     pool, rabbitmq_url, broker, committed_data: TestData, db, description: str
 ) -> None:

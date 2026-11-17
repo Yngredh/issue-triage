@@ -17,7 +17,7 @@ class IssueText:
     """Texto analisado na tentativa (D14).
 
     `title` e `description` são a versão mais recente recebida (o `issue.created` de origem ou o
-    último `issue.edited`); `description_empty` segue a regra `btrim(description) = ''`.
+    último `issue.edited`); `description_empty` segue a regra de `is_blank` (D19).
     `enrichments` são os enriquecimentos do revisor, em ordem de `created_at`. Tudo isso é dado,
     nunca instrução (RNF09).
     """
@@ -26,3 +26,12 @@ class IssueText:
     description: str
     description_empty: bool
     enrichments: tuple[str, ...]
+
+
+def is_blank(text: str) -> bool:
+    """Diz se o texto é vazio ou só tem espaços em branco de qualquer tipo (D19).
+
+    Espaço, tab, quebra de linha e os demais brancos removidos por `str.strip()` contam como
+    vazio, a mesma regra da entrada no issue-analyst-api; `btrim` sozinho só remove espaços.
+    """
+    return not text.strip()

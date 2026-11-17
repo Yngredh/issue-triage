@@ -2,7 +2,7 @@
 
 from psycopg import AsyncConnection
 
-from issue_triage.domain.issue import IssueText, OriginEvent
+from issue_triage.domain.issue import IssueText, OriginEvent, is_blank
 
 
 async def find_origin_event(conn: AsyncConnection, event_id: str) -> OriginEvent | None:
@@ -23,10 +23,10 @@ async def read_issue_text(conn: AsyncConnection, origin: OriginEvent) -> IssueTe
 
     O texto é a versão mais recente recebida: o último `issue.edited` da issue, por
     `received_at`, ou o `issue.created` de origem se não houver edição. A descrição vazia segue
-    a regra `btrim(description) = ''` do passo 4 do processamento.
+    a regra de `is_blank` (D19): vazia ou só com espaços em branco de qualquer tipo.
     """
     cur = await conn.execute(
-        "SELECT title, description, btrim(description) = '' FROM inbound.issue_events "
+        "SELECT title, description FROM inbound.issue_events "
         "WHERE repository = %s AND issue_number = %s "
         "  AND (event_id = %s OR type = 'issue.edited') "
         "ORDER BY (type = 'issue.edited') DESC, received_at DESC, event_id DESC "
@@ -36,7 +36,7 @@ async def read_issue_text(conn: AsyncConnection, origin: OriginEvent) -> IssueTe
     row = await cur.fetchone()
     if row is None:  # o evento de origem foi lido no passo 2 e nunca é apagado
         raise LookupError(f"origin event {origin.event_id} not found")
-    title, description, description_empty = row
+    title, description = row
 
     cur = await conn.execute(
         "SELECT enrichment_description FROM inbound.issue_review_history "
@@ -47,6 +47,6 @@ async def read_issue_text(conn: AsyncConnection, origin: OriginEvent) -> IssueTe
     return IssueText(
         title=title,
         description=description,
-        description_empty=description_empty,
+        description_empty=is_blank(description),
         enrichments=enrichments,
     )

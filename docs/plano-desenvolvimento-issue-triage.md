@@ -495,10 +495,10 @@ Requisitos: RF09, RF10, RF11, RF20, RF28, RNF04. Depende de: Etapa 3. Pré-condi
 
 ### Etapa 5 — Relay da publish_outbox
 Requisitos: RF21, RNF05. Depende de: Etapa 4. Pré-condição: decisões D6, D7 e D19 validadas.
-- [ ] Correção da D19 (item 5) na Etapa 4: descrição vazia = vazia ou só com espaços em branco de qualquer tipo (`str.strip()` ou `\s`), não só `btrim`; testes com descrição só de quebras de linha e só de tabs gerando `missing_info` (RF20).
-- [ ] Declarar a fila `publish` durável e sem argumentos na subida (D6).
-- [ ] Relay da `triage.publish_outbox` (D7): lê linhas pendentes com `FOR UPDATE SKIP LOCKED`, publica com confirmação do broker e marca `published_at` na mesma transação; reconecta com backoff.
-- [ ] Testes de integração: a mensagem do caso H05 chega à fila `publish` no formato `{"proposalId", "revision"}`; broker parado deixa a linha pendente e ela sai quando o broker volta; duas instâncias do relay não publicam a mesma linha duas vezes (o consumidor idempotente do publisher cobre o que escapar).
+- [x] Correção da D19 (item 5) na Etapa 4: descrição vazia = vazia ou só com espaços em branco de qualquer tipo (`str.strip()` ou `\s`), não só `btrim`; testes com descrição só de quebras de linha e só de tabs gerando `missing_info` (RF20).
+- [x] Declarar a fila `publish` durável e sem argumentos na subida (D6).
+- [x] Relay da `triage.publish_outbox` (D7): lê linhas pendentes com `FOR UPDATE SKIP LOCKED`, publica com confirmação do broker e marca `published_at` na mesma transação; reconecta com backoff.
+- [x] Testes de integração: a mensagem do caso H05 chega à fila `publish` no formato `{"proposalId", "revision"}`; broker parado deixa a linha pendente e ela sai quando o broker volta; duas instâncias do relay não publicam a mesma linha duas vezes (o consumidor idempotente do publisher cobre o que escapar).
 
 ### Etapa 6 — Roteador
 Requisitos: RF12, RF13, RF18, RNF04, RNF09. Depende de: Etapa 4. Pré-condição: decisões D10, D12 e D14 validadas.
