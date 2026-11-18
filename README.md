@@ -82,13 +82,18 @@ docker compose down      # use -v para apagar os dados (o initdb roda de novo na
   padrão; senha igual ao nome do papel, só uso local), `catalog/schema.sql`, `catalog/seed.sql` e
   `infra/initdb/03_catalog_grants.sql` (`SELECT` do `catalog` para o issue-triage e o issue-publisher).
 - Cada serviço roda a própria migração (`python -m <pacote>.migrate`) com o papel dele antes de
-  iniciar. O issue-analyst-api sobe e migra primeiro (cria `inbound`); os outros dois esperam o
-  `/health` dele. A migração `0002` deste repositório dá `SELECT` da view
+  iniciar. O issue-triage e o issue-publisher sobem e migram primeiro; cada um fica saudável
+  (`healthcheck`) quando a última migração dele está registrada em `triage.schema_migrations` ou
+  `publisher.schema_migrations`. O issue-analyst-api espera os dois (`service_healthy`) e só então
+  migra, para a view `inbound.issue_presentation` (RF27) ler tabelas de `triage` e `publisher` já
+  criadas (P2). A migração `0002` deste repositório dá `SELECT` da view
   `triage.publishable_proposals` ao `publisher_svc` (só se o papel existir).
 - Portas do host (configuráveis no `.env`, sem colidir com os containers `mechanical-hub-*`):
   PostgreSQL `5433` (`POSTGRES_PORT`), RabbitMQ `5673` e `15673` (`RABBITMQ_PORT` e
   `RABBITMQ_MANAGEMENT_PORT`), issue-analyst-api `8081` (`ANALYST_API_PORT`).
-- Sem `ANTHROPIC_API_KEY` o worker registra `worker.missing_api_key` e sai com código 1.
+- O ambiente integrado exige `ANTHROPIC_API_KEY` para subir (P5): sem ela o worker registra
+  `worker.missing_api_key` e sai com código 1, e o issue-analyst-api não sobe, porque espera o
+  issue-triage ficar saudável.
 - `catalog/source` é montada somente leitura no `issue-triage`.
 
 ### Aplicar a seed de novo

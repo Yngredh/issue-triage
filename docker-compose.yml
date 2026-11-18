@@ -2,8 +2,12 @@
 # issue-analyst-api, issue-triage e issue-publisher. Somente para uso local.
 # Os repositórios irmãos ../issue-analyst-api e ../issue-publisher precisam estar ao lado deste.
 # Portas do host por `.env` (padrões que não colidem com os containers mechanical-hub-*).
-# Cada serviço migra o próprio schema, com o papel dele, antes de iniciar (D32). O issue-analyst-api
-# sobe e migra primeiro (cria `inbound`, que o issue-triage lê); os outros dois esperam por ele (P2).
+# Cada serviço migra o próprio schema, com o papel dele, antes de iniciar (D32). O issue-triage e o
+# issue-publisher sobem e migram primeiro; cada um fica saudável quando a última migração dele está
+# registrada. O issue-analyst-api espera os dois (`service_healthy`) e só então migra, para a view
+# `inbound.issue_presentation` (RF27) ler tabelas de `triage` e `publisher` já criadas (P2).
+# O ambiente exige ANTHROPIC_API_KEY: sem ela o worker do issue-triage sai com código 1
+# (`worker.missing_api_key`) e o issue-analyst-api não sobe (P5).
 services:
   postgres:
     image: postgres:16
@@ -52,6 +56,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      issue-triage:
+        condition: service_healthy
+      issue-publisher:
+        condition: service_healthy
     healthcheck:
       # `/health` só responde depois da migração, que roda antes do servidor.
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=3)"]
@@ -73,8 +81,12 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      issue-analyst-api:
-        condition: service_healthy
+    healthcheck:
+      # Saudável quando a última migração do diretório `migrations` está em triage.schema_migrations.
+      test: ["CMD", "python", "-c", "import os, psycopg; from issue_triage.migrate import discover_migrations; c = psycopg.connect(os.environ['DATABASE_URL']); done = [r[0] for r in c.execute('SELECT version FROM triage.schema_migrations')]; raise SystemExit(0 if discover_migrations()[-1][0] in done else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   issue-publisher:
     build: ../issue-publisher
@@ -88,8 +100,12 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      issue-analyst-api:
-        condition: service_healthy
+    healthcheck:
+      # Saudável quando a última migração do diretório `migrations` está em publisher.schema_migrations.
+      test: ["CMD", "python", "-c", "import os, psycopg; from issue_publisher.migrate import discover_migrations; c = psycopg.connect(os.environ['DATABASE_URL']); done = [r[0] for r in c.execute('SELECT version FROM publisher.schema_migrations')]; raise SystemExit(0 if discover_migrations()[-1][0] in done else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
   postgres-data:
