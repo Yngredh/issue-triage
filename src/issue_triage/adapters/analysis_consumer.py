@@ -9,11 +9,15 @@ import contextlib
 from collections.abc import Awaitable, Callable
 
 import aio_pika
+import structlog
 from aio_pika.abc import AbstractChannel, AbstractConnection, AbstractIncomingMessage, AbstractQueue
 
 from issue_triage.domain.messages import Outcome
 
 ANALYSIS_QUEUE = "analysis"
+ERROR_DETAIL_MAX_CHARS = 300
+
+logger = structlog.get_logger()
 
 RECONNECT_BACKOFF_INITIAL_S = 1.0
 RECONNECT_BACKOFF_MAX_S = 30.0
@@ -72,10 +76,16 @@ class AnalysisConsumer:
                 await self._consume()
             except asyncio.CancelledError:
                 raise
-            except Exception:
+            except Exception as exc:
                 # Falha no banco ou no broker: a mensagem sem ack volta à fila quando a conexão
-                # fecha; a espera só volta a 1 s depois de uma mensagem concluída.
-                pass
+                # fecha; a espera só volta a 1 s depois de uma mensagem concluída. O erro é
+                # registrado (D34), senão a reentrega infinita fica sem causa visível.
+                logger.error(
+                    "worker.consumer_error",
+                    error_type=type(exc).__name__,
+                    detail=str(exc)[:ERROR_DETAIL_MAX_CHARS],
+                    retry_in_s=self._backoff_s,
+                )
             await self._close_broker()
             await asyncio.sleep(self._backoff_s)
             self._backoff_s = min(self._backoff_s * 2, self._backoff_max_s)

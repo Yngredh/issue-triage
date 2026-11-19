@@ -473,6 +473,27 @@ async def test_failed_processing_is_not_acked_and_comes_back(rabbitmq_url, broke
     assert queue.declaration_result.message_count == 0
 
 
+async def test_consumer_logs_the_error_that_sends_the_message_back(rabbitmq_url, broker) -> None:
+    """D34: a falha que devolve a mensagem para a fila não pode ficar sem log."""
+
+    async def broken(body: bytes) -> Outcome:
+        raise psycopg.errors.UndefinedTable(
+            'relation "inbound.issue_review_history" does not exist'
+        )
+
+    with structlog.testing.capture_logs() as logs:
+        async with running_consumer(broken, rabbitmq_url) as results:
+            await publish(broker, b'{"eventId": "evt-broken"}')
+            await asyncio.wait_for(results.get(), timeout=20)
+            await asyncio.sleep(0.2)
+
+    errors = [entry for entry in logs if entry["event"] == "worker.consumer_error"]
+    assert errors
+    assert errors[0]["log_level"] == "error"
+    assert errors[0]["error_type"] == "UndefinedTable"
+    assert "issue_review_history" in errors[0]["detail"]
+
+
 async def test_current_text_is_the_last_edit_and_enrichments_keep_order(
     pool, committed_data: TestData
 ) -> None:

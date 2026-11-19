@@ -80,7 +80,8 @@ docker compose down      # use -v para apagar os dados (o initdb roda de novo na
 - O initdb roda, nesta ordem: `infra/initdb/00_roles.sql` (papéis `analyst_api`, `triage_svc` e
   `publisher_svc`, schemas com dono, `GRANT CREATE ON DATABASE` no banco atual e privilégios
   padrão; senha igual ao nome do papel, só uso local), `catalog/schema.sql`, `catalog/seed.sql` e
-  `infra/initdb/03_catalog_grants.sql` (`SELECT` do `catalog` para o issue-triage e o issue-publisher).
+  `infra/initdb/03_catalog_grants.sql` (`SELECT` do `catalog` para o issue-triage e o issue-publisher) e `infra/initdb/04_inbound_review_history.sql` (tabela `inbound.issue_review_history`, da Revisão Humana Spec, que o issue-triage lê em toda análise e nenhuma migração cria; D34).
+  O initdb só roda em volume novo: num banco que já existia, use `docker compose down -v` ou aplique o arquivo com `psql -U postgres -d issue_maintenance -f`.
 - Cada serviço roda a própria migração (`python -m <pacote>.migrate`) com o papel dele antes de
   iniciar. O issue-triage e o issue-publisher sobem e migram primeiro; cada um fica saudável
   (`healthcheck`) quando a última migração dele está registrada em `triage.schema_migrations` ou

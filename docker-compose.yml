@@ -24,6 +24,7 @@ services:
       - ./catalog/schema.sql:/docker-entrypoint-initdb.d/01_catalog_schema.sql:ro
       - ./catalog/seed.sql:/docker-entrypoint-initdb.d/02_catalog_seed.sql:ro
       - ./infra/initdb/03_catalog_grants.sql:/docker-entrypoint-initdb.d/03_catalog_grants.sql:ro
+      - ./infra/initdb/04_inbound_review_history.sql:/docker-entrypoint-initdb.d/04_inbound_review_history.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d issue_maintenance"]
       interval: 5s
