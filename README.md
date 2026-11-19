@@ -77,7 +77,6 @@ docker compose logs -f issue-triage
 docker compose down      # use -v para apagar os dados (o initdb roda de novo na próxima subida)
 ```
 
-- O initdb roda, nesta ordem: `infra/initdb/00_roles.sql` (papéis `analyst_api`, `triage_svc` e
   `publisher_svc`, schemas com dono, `GRANT CREATE ON DATABASE` no banco atual e privilégios
   padrão; senha igual ao nome do papel, só uso local), `catalog/schema.sql`, `catalog/seed.sql` e
   `infra/initdb/03_catalog_grants.sql` (`SELECT` do `catalog` para o issue-triage e o issue-publisher) e `infra/initdb/04_inbound_review_history.sql` (tabela `inbound.issue_review_history`, da Revisão Humana Spec, que o issue-triage lê em toda análise e nenhuma migração cria; D34).
@@ -121,6 +120,17 @@ Grava um `issue.created` em `inbound.issue_events` (`event_id = dev-<uuid>`) e p
 fila `analysis`. Usa `DATABASE_URL` e `RABBITMQ_URL` do ambiente ou do `.env` (em desenvolvimento, o
 usuário `postgres` e as portas do host). Sem `--issue-number`, usa o horário atual em segundos.
 
+### Logs
+
+Cada linha é um JSON com `module` e `func_name` (de onde o log saiu) e `message` (texto fixo em
+português que diz o que aconteceu), além do `event` estável e do `event_id` de correlação. As
+mensagens ficam em `src/issue_triage/log_messages.py`. Exemplo:
+
+```json
+{"timestamp": "2026-11-19T11:29:00Z", "level": "info", "service": "issue-triage", "module": "analysis", "func_name": "_process", "event": "analysis.received", "message": "Análise recebida da fila", "event_id": "12151e32-...", "repository": "Yaane-h/mechanical-hub-orchestrator", "issue_number": 1, "trigger": "initial"}
+```
+
+- O initdb roda, nesta ordem: `infra/initdb/00_roles.sql` (papéis `analyst_api`, `triage_svc` e
 ## Testes
 
 ```bash
