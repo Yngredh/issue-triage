@@ -9,10 +9,13 @@ por isso o cliente não refaz chamadas sozinho (`max_retries = 0`).
 
 from typing import Any
 
+import structlog
 from anthropic import AsyncAnthropic
 from pydantic import SecretStr
 
 from issue_triage.domain.prompts import ROUTER_TOOL_NAME
+
+logger = structlog.get_logger()
 
 
 class AnthropicRouterLLM:
@@ -51,6 +54,16 @@ class AnthropicRouterLLM:
             tools=[{"name": ROUTER_TOOL_NAME, "input_schema": schema}],
             tool_choice={"type": "tool", "name": ROUTER_TOOL_NAME},
             timeout=self._timeout_s,
+        )
+        usage = getattr(response, "usage", None)
+        logger.info(
+            "triage.model_response",
+            stage="router",
+            model=self.model,
+            request_id=getattr(response, "_request_id", None),
+            stop_reason=getattr(response, "stop_reason", None),
+            input_tokens=getattr(usage, "input_tokens", None),
+            output_tokens=getattr(usage, "output_tokens", None),
         )
         for block in response.content:
             if getattr(block, "type", None) == "tool_use" and block.name == ROUTER_TOOL_NAME:

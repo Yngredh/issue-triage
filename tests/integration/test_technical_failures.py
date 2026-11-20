@@ -137,6 +137,16 @@ async def test_three_503_end_in_technical_failure(pool, committed_data: TestData
     assert events.count("triage.retry_scheduled") == 2
     [failure] = [e for e in logs if e["event"] == "triage.technical_failure"]
     assert failure["error"] == "provider: server_error: 503"
+    assert failure["cause"].startswith("anthropic.APIStatusError")
+    calls = [e for e in logs if e["event"] == "triage.provider_call"]
+    assert [(e["stage"], e["outcome"]) for e in calls] == [
+        ("router", "ok"),
+        ("specialist", "error"),
+        ("specialist", "error"),
+        ("specialist", "error"),
+    ]
+    assert all({"duration_ms", "error", "cause", "request_id"} <= e.keys() for e in calls[1:])
+    assert "texto do provedor" not in repr(logs)
 
 
 async def test_retries_are_shared_by_the_stages_of_the_message(

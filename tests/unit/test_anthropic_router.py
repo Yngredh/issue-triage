@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import structlog
 from pydantic import SecretStr
 
 from issue_triage.adapters.anthropic_router import AnthropicRouterLLM
@@ -72,3 +73,33 @@ def test_real_client_is_built_without_retries_and_key_is_hidden() -> None:
     assert adapter._client.max_retries == 0
     assert adapter._client.timeout == 20
     assert API_KEY not in repr(adapter)
+
+
+async def test_logs_the_model_response_without_the_key() -> None:
+    response = SimpleNamespace(
+        content=[],
+        usage=SimpleNamespace(input_tokens=12, output_tokens=3),
+        stop_reason="tool_use",
+        _request_id="req_abc",
+    )
+    adapter = AnthropicRouterLLM(
+        SecretStr(API_KEY),
+        model="claude-haiku-5-5",
+        max_tokens=300,
+        timeout_s=20,
+        client=SimpleNamespace(messages=SimpleNamespace(create=lambda **_kwargs: _done(response))),
+    )
+
+    with structlog.testing.capture_logs() as logs:
+        await adapter.structured("s", "u", {})
+
+    [entry] = [e for e in logs if e["event"] == "triage.model_response"]
+    assert entry["stage"] == "router"
+    assert entry["model"] == "claude-haiku-5-5"
+    assert entry["request_id"] == "req_abc"
+    assert (entry["input_tokens"], entry["output_tokens"]) == (12, 3)
+    assert API_KEY not in repr(logs)
+
+
+async def _done(value: Any) -> Any:
+    return value

@@ -7,6 +7,7 @@ retomada, a decisão gravada do roteador é reutilizada, sem nova chamada (RNF04
 
 import asyncio
 import dataclasses
+import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypeVar
@@ -38,13 +39,25 @@ _CONTEXT_KEYS = ("event_id", "repository", "issue_number", "attempt")
 T = TypeVar("T")
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 3)
+
+
 class _TechnicalFailed(Exception):
     """Falha técnica sem nova tentativa: permanente ou tentativas esgotadas (D28)."""
 
-    def __init__(self, error: str, stage: str) -> None:
+    def __init__(
+        self,
+        error: str,
+        stage: str,
+        cause: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
         super().__init__(error)
         self.error = error
         self.stage = stage
+        self.cause = cause
+        self.request_id = request_id
 
 
 class AnalysisProcessor:
@@ -294,15 +307,39 @@ class AnalysisProcessor:
         e repete só esta etapa. Permanente, inesperada ou sem atraso: `_TechnicalFailed`.
         """
         while True:
+            started = time.monotonic()
             try:
-                return await call()
+                result = await call()
             except Exception as exc:
                 failure: TechnicalFailure = classify(exc)
+                logger.warning(
+                    "triage.provider_call",
+                    stage=stage,
+                    outcome="error",
+                    duration_ms=_elapsed_ms(started),
+                    error=failure.error,
+                    transient=failure.transient,
+                    cause=failure.cause,
+                    request_id=failure.request_id,
+                )
+            else:
+                logger.info(
+                    "triage.provider_call",
+                    stage=stage,
+                    outcome="ok",
+                    duration_ms=_elapsed_ms(started),
+                )
+                return result
             delay = next(retries, None) if failure.transient else None
             if delay is None:
-                raise _TechnicalFailed(failure.error, stage)
+                raise _TechnicalFailed(failure.error, stage, failure.cause, failure.request_id)
             logger.warning(
-                "triage.retry_scheduled", stage=stage, error=failure.error, delay_s=delay
+                "triage.retry_scheduled",
+                stage=stage,
+                error=failure.error,
+                delay_s=delay,
+                cause=failure.cause,
+                request_id=failure.request_id,
             )
             await asyncio.sleep(delay)
 
@@ -333,6 +370,8 @@ class AnalysisProcessor:
                 "triage.technical_failure",
                 stage=failed.stage,
                 error=failed.error,
+                cause=failed.cause,
+                request_id=failed.request_id,
                 status=finished.outcome,
                 status_reason=finished.status_reason,
             )

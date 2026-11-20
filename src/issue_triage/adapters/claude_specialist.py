@@ -14,6 +14,7 @@ import dataclasses
 from collections.abc import Callable
 from typing import Any
 
+import structlog
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
@@ -37,6 +38,8 @@ from issue_triage.domain.specialist import (
     SpecialistRequest,
     SpecialistResult,
 )
+
+logger = structlog.get_logger()
 
 SERVER_NAME = "catalog"
 
@@ -168,6 +171,17 @@ class ClaudeSpecialistRunner:
             finally:
                 await client.disconnect()
 
+        logger.info(
+            "triage.model_response",
+            stage="specialist",
+            model=spec.model,
+            subtype=getattr(message, "subtype", None),
+            is_error=getattr(message, "is_error", None),
+            num_turns=getattr(message, "num_turns", None),
+            cost_usd=getattr(message, "total_cost_usd", None),
+            tool_calls=len(tools.tool_calls()),
+            limit=tools.limit,
+        )
         if tools.limit is not None:
             # A saída do modelo é ignorada (D22).
             return SpecialistResult(
