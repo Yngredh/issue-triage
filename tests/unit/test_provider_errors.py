@@ -1,5 +1,8 @@
 """Classificação das falhas técnicas dos SDKs (Etapa 10; RNF08; D28)."""
 
+import socket
+import ssl
+
 import anthropic
 import httpx2
 import pytest
@@ -87,3 +90,72 @@ def test_unexpected_exception_is_permanent_internal(exc: Exception, error: str) 
     failure = classify(exc)
 
     assert (failure.error, failure.transient) == (error, False)
+
+
+def connection_error(*causes: BaseException) -> anthropic.APIConnectionError:
+    """`APIConnectionError` com a cadeia de causas dada (a primeira é a mais externa)."""
+    for outer, inner in zip(causes, causes[1:], strict=False):
+        outer.__cause__ = inner
+    exc = anthropic.APIConnectionError(request=REQUEST)
+    exc.__cause__ = causes[0] if causes else None
+    return exc
+
+
+@pytest.mark.parametrize(
+    ("causes", "error"),
+    [
+        (
+            (httpx2.ConnectError("x"), socket.gaierror(-2, "Name or service not known")),
+            "provider: connection_dns",
+        ),
+        ((httpx2.ConnectError("x"), ssl.SSLCertVerificationError("y")), "provider: connection_tls"),
+        ((httpx2.ConnectError("x"), ConnectionRefusedError("z")), "provider: connection_refused"),
+        ((httpx2.ProxyError("x"),), "provider: connection_proxy"),
+        (
+            (httpx2.LocalProtocolError("Illegal header value"),),
+            "provider: connection_protocol_local",
+        ),
+        ((httpx2.RemoteProtocolError("x"),), "provider: connection_protocol_remote"),
+        ((httpx2.ConnectError("x"),), "provider: connection_connect"),
+        ((ValueError("desconhecida"),), "provider: connection"),
+        ((), "provider: connection"),
+    ],
+)
+def test_connection_failures_are_subdivided_by_cause(
+    causes: tuple[BaseException, ...], error: str
+) -> None:
+    failure = classify(connection_error(*causes))
+
+    assert (failure.error, failure.transient) == (error, True)
+
+
+def test_cause_lists_only_exception_types_never_messages() -> None:
+    exc = connection_error(httpx2.ConnectError("segredo-no-texto"), socket.gaierror(-2, "dns-msg"))
+
+    failure = classify(exc)
+
+    assert failure.cause == (
+        "anthropic.APIConnectionError <- httpx2.ConnectError <- socket.gaierror"
+    )
+    assert "segredo-no-texto" not in repr(failure)
+    assert "dns-msg" not in repr(failure)
+
+
+def test_request_id_comes_from_the_response_header() -> None:
+    response = httpx2.Response(503, request=REQUEST, headers={"request-id": "req_123"})
+    exc = anthropic.APIStatusError("texto do provedor", response=response, body=None)
+
+    failure = classify(exc)
+
+    assert failure.request_id == "req_123"
+    assert failure.error == "provider: server_error: 503"
+
+
+def test_failures_without_response_have_no_request_id() -> None:
+    assert classify(anthropic.APITimeoutError(request=REQUEST)).request_id is None
+
+
+def test_result_error_cause_carries_the_terminal_reason() -> None:
+    failure = classify(ResultError("falhou", data={"terminal_reason": "api_error"}))
+
+    assert failure.cause == "claude_agent_sdk._errors.ResultError (terminal_reason=api_error)"
